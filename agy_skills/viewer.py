@@ -57,10 +57,8 @@ def render_skill_view(info: SkillInfo, max_lines: Optional[int] = None) -> str:
         for line in displayed_lines:
             body_lines.append(f"  {highlight_markdown_line(line)}")
 
-        footer = f"\n{DIM}(1-{len(displayed_lines)} of {total_lines} lines){RESET}"
-        nav_bar = f"\n{DIM}↑/↓ scroll · pgup/pgdown page · ctrl+end bottom · ctrl+home top · esc back{RESET}"
-
-        return header + "\n".join(body_lines) + footer + nav_bar
+        footer = f"\n{DIM}(Showing {len(displayed_lines)} of {total_lines} lines · Run 'agy-skills browse' to edit){RESET}"
+        return header + "\n".join(body_lines) + footer
     except Exception as e:
         return f"Error reading skill at {info.path}: {e}"
 

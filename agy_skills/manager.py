@@ -85,16 +85,16 @@ class SkillManager:
         total_skills = total_active + len(catalog)
 
         out = []
-        out.append(f"{BOLD}Antigravity Context & Skills Manager{RESET}")
-        out.append(f"Context Budget: {budget.total_tokens:,} / {budget.max_tokens:,} tokens ({budget.percentage:.1f}%) "
+        out.append(f"{BOLD}Antigravity Skills & Context Manager{RESET}")
+        out.append(f"AI Prompt Memory: {budget.total_tokens:,} / {budget.max_tokens:,} tokens ({budget.percentage:.1f}% used) "
                    f"[Rules: {budget.rules_tokens:,} · Skills: {budget.skills_tokens:,} · Agents: {budget.subagents_tokens:,}]\n")
 
-        out.append(f"{BOLD}Skills{RESET}: {total_skills} total ({total_active} active · {len(catalog)} in catalog)\n")
+        out.append(f"{BOLD}Skills Overview{RESET}: {total_skills} total ({total_active} active · {len(catalog)} available to activate)\n")
 
         # Workspace Skills
         if ws:
-            loc_label = "Workspace config" if self.scope.is_project_detected else "Home dotfiles"
-            out.append(f"{BOLD}Workspace skills{RESET} · {DIM}{loc_label}{RESET}")
+            loc_label = "Active in this project" if self.scope.is_project_detected else "Global user profile"
+            out.append(f"{BOLD}Project Skills{RESET} · {DIM}{loc_label}{RESET}")
             for name, info in sorted(ws.items()):
                 tag = f"{CYAN}🔗{RESET} " if info.is_symlink else ""
                 out.append(f"  {tag}{CYAN}{name}{RESET}: {info.description}")
@@ -102,19 +102,19 @@ class SkillManager:
 
         # Shared Skills
         if shared:
-            out.append(f"{BOLD}Shared skills{RESET} · {DIM}From {self.scope.shared_skills_dir}{RESET}")
+            out.append(f"{BOLD}User Profile Skills{RESET} · {DIM}Available across all projects{RESET}")
             for name, info in sorted(shared.items()):
                 out.append(f"  {CYAN}{name}{RESET}: {info.description}")
             out.append("")
 
         # Available Catalog
         if catalog:
-            out.append(f"{BOLD}Available in Catalog{RESET} · {DIM}Ready to activate ({len(catalog)} skills){RESET}")
+            out.append(f"{BOLD}Available in Library{RESET} · {DIM}Ready to activate ({len(catalog)} skills){RESET}")
             for name, info in sorted(catalog.items()):
                 out.append(f"  {DIM}⚪ {name}: {info.description}{RESET}")
             out.append("")
 
-        out.append(f"{DIM}Press 'agy-skills browse' for the full interactive TUI & live budget meter.{RESET}")
+        out.append(f"{DIM}Tip: Run 'agy-skills browse' for the full interactive visual viewer and live editor.{RESET}")
         return "\n".join(out)
 
     def find_skill(self, name: str) -> Optional[SkillInfo]:
@@ -145,12 +145,12 @@ class SkillManager:
         try:
             if copy_mode:
                 shutil.copytree(src_dir, dest_dir, symlinks=True)
-                return True, f"✅ Enabled '{name}' in {target_tier} (copied to {dest_dir})"
+                return True, f"✅ Activated '{name}' for this project (copied to {dest_dir})\n👉 Trigger anytime in chat with: /{name}"
             else:
                 os.symlink(src_dir, dest_dir)
-                return True, f"✅ Enabled '{name}' in {target_tier} (symlinked to {dest_dir})"
+                return True, f"✅ Activated '{name}' for this project (linked to {dest_dir})\n👉 Trigger anytime in chat with: /{name}"
         except Exception as e:
-            return False, f"Failed to enable skill '{name}': {e}"
+            return False, f"Failed to activate skill '{name}': {e}"
 
     def disable(self, name: str, target_tier: Optional[str] = None) -> Tuple[bool, str]:
         candidates = []
