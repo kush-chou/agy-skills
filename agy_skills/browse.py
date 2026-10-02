@@ -125,11 +125,23 @@ class SkillBrowser:
             # Draw layout
             stdscr.clear()
 
+            def safe_addstr(y, x, text, attr=0):
+                if y < 0 or y >= max_y or x < 0 or x >= max_x:
+                    return
+                # Limit text length to max_x - x - 1 if on the last row to avoid curses ERR
+                avail = max_x - x
+                if y == max_y - 1:
+                    avail = max(0, avail - 1)
+                t = str(text)[:avail]
+                if t:
+                    try:
+                        stdscr.addstr(y, x, t, attr)
+                    except curses.error:
+                        pass
+
             # 1. Header Bar
             header_text = f" agy-skills browse · Scope: {self.target_scope.upper()} · {len(items)} skills"
-            stdscr.attron(curses.color_pair(6) | curses.A_BOLD)
-            stdscr.addstr(0, 0, header_text.ljust(max_x)[:max_x])
-            stdscr.attroff(curses.color_pair(6) | curses.A_BOLD)
+            safe_addstr(0, 0, header_text.ljust(max_x), curses.color_pair(6) | curses.A_BOLD)
 
             # Split geometry
             left_width = min(max(34, max_x // 3), 48)
@@ -138,10 +150,13 @@ class SkillBrowser:
 
             # Draw Vertical Divider
             for y in range(1, max_y - 2):
-                stdscr.addch(y, left_width, curses.ACS_VLINE)
+                if left_width < max_x:
+                    try:
+                        stdscr.addch(y, left_width, curses.ACS_VLINE)
+                    except curses.error:
+                        pass
 
             # 2. Render Left Pane (List)
-            current_category = None
             row = 1
             visible_rows = content_height
 
@@ -161,13 +176,9 @@ class SkillBrowser:
                 line_str = line_str[:left_width-1].ljust(left_width-1)
 
                 if is_selected:
-                    stdscr.attron(curses.color_pair(5) | curses.A_BOLD)
-                    stdscr.addstr(row, 0, line_str)
-                    stdscr.attroff(curses.color_pair(5) | curses.A_BOLD)
+                    safe_addstr(row, 0, line_str, curses.color_pair(5) | curses.A_BOLD)
                 else:
-                    stdscr.attron(color)
-                    stdscr.addstr(row, 0, line_str)
-                    stdscr.attroff(color)
+                    safe_addstr(row, 0, line_str, color)
 
                 row += 1
 
@@ -179,23 +190,15 @@ class SkillBrowser:
                 for p_idx in range(self.preview_scroll, min(len(preview_lines), self.preview_scroll + visible_rows)):
                     pline = preview_lines[p_idx][:right_width-1]
                     if pline.startswith("#"):
-                        stdscr.attron(curses.color_pair(4) | curses.A_BOLD)
-                        stdscr.addstr(p_row, left_width + 1, pline)
-                        stdscr.attroff(curses.color_pair(4) | curses.A_BOLD)
+                        safe_addstr(p_row, left_width + 1, pline, curses.color_pair(4) | curses.A_BOLD)
                     elif pline.startswith("Name:") or pline.startswith("Tier:"):
-                        stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-                        stdscr.addstr(p_row, left_width + 1, pline)
-                        stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+                        safe_addstr(p_row, left_width + 1, pline, curses.color_pair(2) | curses.A_BOLD)
                     elif pline.startswith("Description:"):
-                        stdscr.attron(curses.A_BOLD)
-                        stdscr.addstr(p_row, left_width + 1, pline)
-                        stdscr.attroff(curses.A_BOLD)
+                        safe_addstr(p_row, left_width + 1, pline, curses.A_BOLD)
                     elif pline.startswith("-"):
-                        stdscr.attron(curses.A_DIM)
-                        stdscr.addstr(p_row, left_width + 1, pline)
-                        stdscr.attroff(curses.A_DIM)
+                        safe_addstr(p_row, left_width + 1, pline, curses.A_DIM)
                     else:
-                        stdscr.addstr(p_row, left_width + 1, pline)
+                        safe_addstr(p_row, left_width + 1, pline)
                     p_row += 1
 
             # 4. Status and Prompt Footer
@@ -204,20 +207,14 @@ class SkillBrowser:
 
             if self.search_mode:
                 prompt = f"Search: /{self.query}"
-                stdscr.attron(curses.color_pair(3) | curses.A_BOLD)
-                stdscr.addstr(footer_y, 0, prompt.ljust(max_x)[:max_x])
-                stdscr.attroff(curses.color_pair(3) | curses.A_BOLD)
+                safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
             elif self.status_msg:
-                stdscr.attron(curses.color_pair(2) | curses.A_BOLD)
-                stdscr.addstr(footer_y, 0, f" {self.status_msg}".ljust(max_x)[:max_x])
-                stdscr.attroff(curses.color_pair(2) | curses.A_BOLD)
+                safe_addstr(footer_y, 0, f" {self.status_msg}".ljust(max_x), curses.color_pair(2) | curses.A_BOLD)
             else:
-                stdscr.addstr(footer_y, 0, " " * max_x)
+                safe_addstr(footer_y, 0, " " * (max_x - 1))
 
             help_bar = " ↑/↓:Nav · Space/Enter:Toggle · Tab:Scope · /:Find · J/K:Scroll · q:Quit"
-            stdscr.attron(curses.A_DIM)
-            stdscr.addstr(help_y, 0, help_bar.ljust(max_x)[:max_x])
-            stdscr.attroff(curses.A_DIM)
+            safe_addstr(help_y, 0, help_bar.ljust(max_x), curses.A_DIM)
 
             stdscr.refresh()
 
