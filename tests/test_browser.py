@@ -22,22 +22,25 @@ class TestBrowser(unittest.TestCase):
         self.assertEqual(self.browser.selected_idx, 0)
         self.assertFalse(self.browser.search_mode)
 
-    def test_browser_filter_and_items(self):
-        items = self.browser.get_items()
+    def test_browser_structured_items(self):
+        items = self.browser.get_structured_items()
         self.assertIsInstance(items, list)
+        selectable = self.browser.get_selectable_indices(items)
+        self.assertIsInstance(selectable, list)
 
     def test_load_skill_preview(self):
         info = SkillInfo(
             name="test-skill",
-            description="A test skill",
+            description="A test skill with a somewhat long description to test word wrapping in hero card",
             path="/tmp/test_ws/.agents/skills/test-skill/SKILL.md",
             tier="workspace",
             is_symlink=False
         )
-        # Should gracefully handle non-existent file in preview
-        preview = self.browser.load_skill_preview(info)
+        preview = self.browser.load_skill_preview(info, width=60)
         self.assertTrue(len(preview) > 0)
-        self.assertIn("Name: test-skill", preview[0])
+        # Check hero title exists in output
+        titles = [text for text, style in preview if style == "hero_title"]
+        self.assertTrue(any("test-skill" in t for t in titles))
 
 if __name__ == "__main__":
     unittest.main()
