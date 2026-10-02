@@ -229,7 +229,7 @@ class SkillBrowser:
     def _main_loop(self, stdscr):
         curses.curs_set(0)
         curses.use_default_colors()
-        stdscr.timeout(100)
+        stdscr.timeout(-1)  # Event-driven: wait for user input instead of 100ms polling loop
 
         # Color pairs setup
         curses.init_pair(1, curses.COLOR_CYAN, -1)     # Cyan / Active
@@ -243,7 +243,7 @@ class SkillBrowser:
         while True:
             max_y, max_x = stdscr.getmaxyx()
             if max_y < 14 or max_x < 65:
-                stdscr.clear()
+                stdscr.erase()
                 stdscr.addstr(0, 0, "Terminal window too small for agy-skills browser.")
                 stdscr.refresh()
                 key = stdscr.getch()
@@ -262,7 +262,7 @@ class SkillBrowser:
                     self.selected_idx = max(0, len(selectable) - 1)
                 selected_item_idx = selectable[self.selected_idx]
 
-            stdscr.clear()
+            stdscr.erase()  # Use erase() instead of clear() to prevent blank screen flicker
 
             def safe_addstr(y, x, text, attr=0):
                 if y < 0 or y >= max_y or x < 0 or x >= max_x:
