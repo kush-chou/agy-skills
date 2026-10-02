@@ -38,13 +38,19 @@ class SkillManager:
         active_ws = scan_rules_dir(self.scope.workspace_rules_dir, tier="workspace")
         active_global = scan_rules_dir(self.scope.global_rules_dir, tier="global")
 
-        # Global rules are active unless overridden by workspace
         active = {**active_global, **active_ws}
 
-        # Backup / catalog rules if any
+        # Check .disabled directories and .md.disabled files
+        disabled_ws = scan_rules_dir(os.path.join(self.scope.workspace_rules_dir, ".disabled"), tier="workspace")
+        disabled_global = scan_rules_dir(os.path.join(self.scope.global_rules_dir, ".disabled"), tier="global")
+        disabled_ext_ws = scan_rules_dir(self.scope.workspace_rules_dir, tier="workspace", include_disabled_ext=True)
+        disabled_ext_global = scan_rules_dir(self.scope.global_rules_dir, tier="global", include_disabled_ext=True)
+
         backup_rules_dir = os.path.join(os.path.expanduser("~"), ".agents.backup", "rules")
         catalog_rules = scan_rules_dir(backup_rules_dir, tier="catalog")
-        available = {k: v for k, v in catalog_rules.items() if k not in active}
+
+        available = {**catalog_rules, **disabled_ext_global, **disabled_ext_ws, **disabled_global, **disabled_ws}
+        available = {k: v for k, v in available.items() if k not in active}
 
         return active, available
 
@@ -54,9 +60,16 @@ class SkillManager:
         active_global = scan_subagents_dir(self.scope.global_agents_subagents_dir, tier="global")
         active = {**active_global, **active_ws}
 
+        disabled_ws = scan_subagents_dir(os.path.join(self.scope.workspace_agents_dir, ".disabled"), tier="workspace")
+        disabled_global = scan_subagents_dir(os.path.join(self.scope.global_agents_subagents_dir, ".disabled"), tier="global")
+        disabled_ext_ws = scan_subagents_dir(self.scope.workspace_agents_dir, tier="workspace", include_disabled_ext=True)
+        disabled_ext_global = scan_subagents_dir(self.scope.global_agents_subagents_dir, tier="global", include_disabled_ext=True)
+
         backup_agents_dir = os.path.join(os.path.expanduser("~"), ".agents.backup", "agents")
         catalog_agents = scan_subagents_dir(backup_agents_dir, tier="catalog")
-        available = {k: v for k, v in catalog_agents.items() if k not in active}
+
+        available = {**catalog_agents, **disabled_ext_global, **disabled_ext_ws, **disabled_global, **disabled_ws}
+        available = {k: v for k, v in available.items() if k not in active}
 
         return active, available
 
@@ -189,3 +202,137 @@ class SkillManager:
                 return True, f"✅ Disabled '{name}' (removed from {found_path})"
         except Exception as e:
             return False, f"Failed to disable skill '{name}': {e}"
+
+    def disable_rule(self, name: str, target_tier: Optional[str] = None) -> Tuple[bool, str]:
+        active_ws = scan_rules_dir(self.scope.workspace_rules_dir, tier="workspace")
+        active_global = scan_rules_dir(self.scope.global_rules_dir, tier="global")
+
+        rule_info = None
+        if target_tier == "global":
+            rule_info = active_global.get(name)
+        elif target_tier == "workspace":
+            rule_info = active_ws.get(name)
+        else:
+            rule_info = active_ws.get(name) or active_global.get(name)
+
+        if not rule_info:
+            return False, f"Rule '{name}' is not currently active."
+
+        try:
+            rule_path = rule_info.path
+            rule_dir = os.path.dirname(rule_path)
+            disabled_dir = os.path.join(rule_dir, ".disabled")
+            os.makedirs(disabled_dir, exist_ok=True)
+            target_path = os.path.join(disabled_dir, os.path.basename(rule_path))
+
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            shutil.move(rule_path, target_path)
+            return True, f"✅ Disabled rule '{name}' (moved to .disabled)"
+        except Exception as e:
+            return False, f"Failed to disable rule '{name}': {e}"
+
+    def enable_rule(self, name: str, target_tier: str = "workspace") -> Tuple[bool, str]:
+        active_ws = scan_rules_dir(self.scope.workspace_rules_dir, tier="workspace")
+        active_global = scan_rules_dir(self.scope.global_rules_dir, tier="global")
+        if name in active_ws or name in active_global:
+            return True, f"Rule '{name}' is already active."
+
+        candidates = [
+            os.path.join(self.scope.workspace_rules_dir, ".disabled", f"{name}.md"),
+            os.path.join(self.scope.global_rules_dir, ".disabled", f"{name}.md"),
+            os.path.join(self.scope.workspace_rules_dir, f"{name}.md.disabled"),
+            os.path.join(self.scope.global_rules_dir, f"{name}.md.disabled"),
+            os.path.join(os.path.expanduser("~"), ".agents.backup", "rules", f"{name}.md"),
+        ]
+
+        found_src = None
+        for c in candidates:
+            if os.path.isfile(c):
+                found_src = c
+                break
+
+        if not found_src:
+            return False, f"Rule '{name}' not found in disabled rules or library."
+
+        try:
+            dest_dir = self.scope.global_rules_dir if target_tier == "global" else self.scope.workspace_rules_dir
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, f"{name}.md")
+
+            if found_src.startswith(os.path.join(dest_dir, ".disabled")):
+                shutil.move(found_src, dest_path)
+            elif found_src.endswith(".md.disabled"):
+                shutil.move(found_src, dest_path)
+            else:
+                shutil.copy2(found_src, dest_path)
+
+            return True, f"✅ Activated rule '{name}' in {target_tier}"
+        except Exception as e:
+            return False, f"Failed to activate rule '{name}': {e}"
+
+    def disable_subagent(self, name: str, target_tier: Optional[str] = None) -> Tuple[bool, str]:
+        active_ws = scan_subagents_dir(self.scope.workspace_agents_dir, tier="workspace")
+        active_global = scan_subagents_dir(self.scope.global_agents_subagents_dir, tier="global")
+
+        agent_info = None
+        if target_tier == "global":
+            agent_info = active_global.get(name)
+        elif target_tier == "workspace":
+            agent_info = active_ws.get(name)
+        else:
+            agent_info = active_ws.get(name) or active_global.get(name)
+
+        if not agent_info:
+            return False, f"Subagent '{name}' is not currently active."
+
+        try:
+            agent_path = agent_info.path
+            agent_dir = os.path.dirname(agent_path)
+            disabled_dir = os.path.join(agent_dir, ".disabled")
+            os.makedirs(disabled_dir, exist_ok=True)
+            target_path = os.path.join(disabled_dir, os.path.basename(agent_path))
+
+            if os.path.exists(target_path):
+                os.remove(target_path)
+            shutil.move(agent_path, target_path)
+            return True, f"✅ Disabled subagent '{name}' (moved to .disabled)"
+        except Exception as e:
+            return False, f"Failed to disable subagent '{name}': {e}"
+
+    def enable_subagent(self, name: str, target_tier: str = "workspace") -> Tuple[bool, str]:
+        active_ws = scan_subagents_dir(self.scope.workspace_agents_dir, tier="workspace")
+        active_global = scan_subagents_dir(self.scope.global_agents_subagents_dir, tier="global")
+        if name in active_ws or name in active_global:
+            return True, f"Subagent '{name}' is already active."
+
+        candidates = [
+            os.path.join(self.scope.workspace_agents_dir, ".disabled", f"{name}.md"),
+            os.path.join(self.scope.global_agents_subagents_dir, ".disabled", f"{name}.md"),
+            os.path.join(self.scope.workspace_agents_dir, f"{name}.md.disabled"),
+            os.path.join(self.scope.global_agents_subagents_dir, f"{name}.md.disabled"),
+            os.path.join(os.path.expanduser("~"), ".agents.backup", "agents", f"{name}.md"),
+        ]
+
+        found_src = None
+        for c in candidates:
+            if os.path.isfile(c):
+                found_src = c
+                break
+
+        if not found_src:
+            return False, f"Subagent '{name}' not found in disabled subagents or library."
+
+        try:
+            dest_dir = self.scope.global_agents_subagents_dir if target_tier == "global" else self.scope.workspace_agents_dir
+            os.makedirs(dest_dir, exist_ok=True)
+            dest_path = os.path.join(dest_dir, f"{name}.md")
+
+            if found_src.startswith(os.path.join(dest_dir, ".disabled")) or found_src.endswith(".md.disabled"):
+                shutil.move(found_src, dest_path)
+            else:
+                shutil.copy2(found_src, dest_path)
+
+            return True, f"✅ Activated subagent '{name}' in {target_tier}"
+        except Exception as e:
+            return False, f"Failed to activate subagent '{name}': {e}"

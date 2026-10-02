@@ -81,7 +81,26 @@ def main(args=None):
             target_tier = "global"
         elif getattr(parsed, "is_shared", False):
             target_tier = "shared"
-        
+
+        # Check if it's a rule first
+        rules_act, rules_avail = mgr.scan_rules()
+        if parsed.name in rules_avail or parsed.name in rules_act:
+            ok, msg = mgr.enable_rule(parsed.name, target_tier=target_tier)
+            print(msg)
+            if not ok:
+                sys.exit(1)
+            return
+
+        # Check if it's a subagent
+        agents_act, agents_avail = mgr.scan_subagents()
+        if parsed.name in agents_avail or parsed.name in agents_act:
+            ok, msg = mgr.enable_subagent(parsed.name, target_tier=target_tier)
+            print(msg)
+            if not ok:
+                sys.exit(1)
+            return
+
+        # Default to skill
         ok, msg = mgr.enable(parsed.name, target_tier=target_tier, copy_mode=getattr(parsed, "copy", False))
         print(msg)
         if not ok:
@@ -94,6 +113,25 @@ def main(args=None):
         elif getattr(parsed, "is_shared", False):
             target_tier = "shared"
 
+        # Check if active rule
+        rules_act, _ = mgr.scan_rules()
+        if parsed.name in rules_act:
+            ok, msg = mgr.disable_rule(parsed.name, target_tier=target_tier)
+            print(msg)
+            if not ok:
+                sys.exit(1)
+            return
+
+        # Check if active subagent
+        agents_act, _ = mgr.scan_subagents()
+        if parsed.name in agents_act:
+            ok, msg = mgr.disable_subagent(parsed.name, target_tier=target_tier)
+            print(msg)
+            if not ok:
+                sys.exit(1)
+            return
+
+        # Default to skill
         ok, msg = mgr.disable(parsed.name, target_tier=target_tier)
         print(msg)
         if not ok:

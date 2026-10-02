@@ -12,6 +12,7 @@ class SkillInfo:
     lines_count: int = 0
     token_cost: int = 0
     collection: str = "core"  # e.g. "stitch", "android", "mattpocock"
+    author: str = "Community"
 
 @dataclass
 class RuleInfo:
@@ -24,6 +25,7 @@ class RuleInfo:
     lines_count: int = 0
     token_cost: int = 0
     collection: str = "core"
+    author: str = "Community"
 
 @dataclass
 class SubagentInfo:
@@ -36,6 +38,7 @@ class SubagentInfo:
     lines_count: int = 0
     token_cost: int = 0
     collection: str = "core"
+    author: str = "Community"
 
 @dataclass
 class ContextBudget:

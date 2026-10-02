@@ -62,5 +62,41 @@ class TestSkillManager(unittest.TestCase):
         # Source in catalog remains untouched
         self.assertTrue(os.path.exists(os.path.join(self.sample_skill_dir, "SKILL.md")))
 
+    def test_rule_enable_and_disable(self):
+        ws_rules = os.path.join(self.test_root, "workspace", "rules")
+        os.makedirs(ws_rules, exist_ok=True)
+        rule_file = os.path.join(ws_rules, "sample-rule.md")
+        with open(rule_file, "w") as f:
+            f.write("---\ndescription: Sample rule\nauthor: Test Author\n---\n# Rule\nBe good.")
+
+        self.scope.workspace_rules_dir = ws_rules
+        active, available = self.manager.scan_rules()
+        self.assertIn("sample-rule", active)
+        self.assertEqual(active["sample-rule"].author, "Test Author")
+
+        # Disable rule
+        ok, msg = self.manager.disable_rule("sample-rule", target_tier="workspace")
+        self.assertTrue(ok)
+        self.assertFalse(os.path.exists(rule_file))
+        disabled_file = os.path.join(ws_rules, ".disabled", "sample-rule.md")
+        self.assertTrue(os.path.exists(disabled_file))
+
+        # Check it now shows up in available
+        active2, available2 = self.manager.scan_rules()
+        self.assertNotIn("sample-rule", active2)
+        self.assertIn("sample-rule", available2)
+
+        # Re-enable rule
+        ok2, msg2 = self.manager.enable_rule("sample-rule", target_tier="workspace")
+        self.assertTrue(ok2)
+        self.assertTrue(os.path.exists(rule_file))
+        self.assertFalse(os.path.exists(disabled_file))
+
+    def test_author_detection(self):
+        ws, shared, builtin, catalog = self.manager.scan_all()
+        skill = catalog["test-skill"]
+        # test-skill was created in self.catalog_dir without author, so fallback
+        self.assertIsNotNone(skill.author)
+
 if __name__ == "__main__":
     unittest.main()

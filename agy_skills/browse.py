@@ -160,15 +160,19 @@ class SkillBrowser:
         meta_1 = f"  Type: {itype.upper()} · Tier: {info.tier.upper()} · Tokens: ~{info.token_cost}{sym_status}"
         out.append((f"│{meta_1.ljust(box_w - 2)}│", "hero_meta"))
 
+        author = getattr(info, "author", "Community")
+        meta_author = f"  Author: {author}"
+        out.append((f"│{meta_author.ljust(box_w - 2)}│", "hero_meta"))
+
         if itype == "skill":
-            meta_2 = f"  Slash Trigger: /{info.name}  [Press 'e' to Edit in Nano]"
+            meta_2 = f"  Slash Trigger: /{info.name}"
             out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
         elif itype == "rule":
             status_str = "ALWAYS-ON" if getattr(info, "is_always_on", False) else "CONDITIONAL"
-            meta_2 = f"  Rule Mode: {status_str}  [Press 'e' to Edit in Nano]"
+            meta_2 = f"  Rule Mode: {status_str}"
             out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
         elif itype == "subagent":
-            meta_2 = f"  Role: {getattr(info, 'role', 'Worker')}  [Press 'e' to Edit in Nano]"
+            meta_2 = f"  Role: {getattr(info, 'role', 'Worker')}"
             out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
 
         desc = getattr(info, "description", "")
@@ -826,6 +830,27 @@ class SkillBrowser:
                             ok, msg = self.mgr.enable(sel_info.name, target_tier=self.target_scope)
                             self.status_msg = msg
                             self.preview_cache.clear()
+
+                    elif itype == "rule":
+                        if is_active:
+                            ok, msg = self.mgr.disable_rule(sel_info.name, target_tier=sel_info.tier)
+                            self.status_msg = msg
+                            self.preview_cache.clear()
+                        else:
+                            ok, msg = self.mgr.enable_rule(sel_info.name, target_tier=self.target_scope)
+                            self.status_msg = msg
+                            self.preview_cache.clear()
+
+                    elif itype == "subagent":
+                        if is_active:
+                            ok, msg = self.mgr.disable_subagent(sel_info.name, target_tier=sel_info.tier)
+                            self.status_msg = msg
+                            self.preview_cache.clear()
+                        else:
+                            ok, msg = self.mgr.enable_subagent(sel_info.name, target_tier=self.target_scope)
+                            self.status_msg = msg
+                            self.preview_cache.clear()
+
                     else:
                         self.status_msg = f"Toggled {itype} '{sel_info.name}'."
 

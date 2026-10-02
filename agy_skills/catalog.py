@@ -89,6 +89,11 @@ def parse_simple_frontmatter(content: str) -> Tuple[Optional[str], Optional[str]
             extra["always_on"] = always_match.group(1).strip().lower()
             continue
 
+        author_match = re.match(r"^\s*author:\s*(.*)$", line, re.IGNORECASE)
+        if author_match:
+            extra["author"] = author_match.group(1).strip().strip("'\"")
+            continue
+
         if in_desc:
             if re.match(r"^[ \t]+\S", line):
                 desc_lines.append(line.strip().strip("'\""))
@@ -97,6 +102,28 @@ def parse_simple_frontmatter(content: str) -> Tuple[Optional[str], Optional[str]
 
     description = " ".join(desc_lines).strip() if desc_lines else None
     return name, description, extra
+
+def detect_author(name: str, path: str, tier: str, explicit_author: Optional[str] = None) -> str:
+    if explicit_author:
+        return explicit_author
+
+    path_low = path.lower()
+    name_low = name.lower()
+    if "mattpocock" in path_low or "matt-pocock" in path_low or "mattpocock" in name_low:
+        return "Matt Pocock (@mattpocock)"
+    elif "stitch" in path_low or "stitch" in name_low:
+        return "Google Stitch Team"
+    elif "litert" in path_low or "litert" in name_low:
+        return "Google LiteRT Team"
+    elif "android" in path_low:
+        return "Google Android Team"
+    elif tier == "builtin" or "builtin" in path_low:
+        return "Google DeepMind Antigravity"
+    elif tier == "workspace":
+        return "Workspace Local"
+    elif tier in ("global", "shared"):
+        return "User Profile"
+    return "Community"
 
 def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = None) -> Optional[SkillInfo]:
     if not os.path.isfile(file_path):
@@ -107,16 +134,17 @@ def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = N
             content = f.read()
 
         match = FRONTMATTER_REGEX.match(content)
-        name, description = None, None
+        name, description, extra = None, None, {}
         if match:
             frontmatter_str = match.group(1)
-            name, description, _ = parse_simple_frontmatter(frontmatter_str)
+            name, description, extra = parse_simple_frontmatter(frontmatter_str)
 
         if not name:
             name = fallback_name or os.path.basename(os.path.dirname(file_path))
         if not description:
             description = "No description provided."
 
+        author = detect_author(name, file_path, tier, extra.get("author"))
         line_count = len(content.splitlines())
         is_link = os.path.islink(file_path) or os.path.islink(os.path.dirname(file_path))
 
@@ -134,6 +162,7 @@ def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = N
             lines_count=line_count,
             token_cost=tokens,
             collection=detect_collection(name),
+            author=author,
         )
     except Exception:
         return None
@@ -188,6 +217,7 @@ def parse_rule_file(file_path: str, tier: str, fallback_name: Optional[str] = No
         # Full body is injected into prompt if always-on; only description if conditional
         cost_text = content if is_always_on else f"- {file_path}: {description}"
         tokens = estimate_tokens(cost_text)
+        author = detect_author(name, file_path, tier, extra.get("author") if match else None)
 
         return RuleInfo(
             name=name,
@@ -199,20 +229,25 @@ def parse_rule_file(file_path: str, tier: str, fallback_name: Optional[str] = No
             lines_count=line_count,
             token_cost=tokens,
             collection=detect_collection(name),
+            author=author,
         )
     except Exception:
         return None
 
-def scan_rules_dir(dir_path: str, tier: str) -> Dict[str, RuleInfo]:
+def scan_rules_dir(dir_path: str, tier: str, include_disabled_ext: bool = False) -> Dict[str, RuleInfo]:
     rules: Dict[str, RuleInfo] = {}
     if not os.path.isdir(dir_path):
         return rules
 
     for entry in sorted(os.listdir(dir_path)):
-        if entry.startswith(".") or not entry.endswith(".md"):
+        if entry.startswith("."):
+            continue
+        is_disabled_ext = entry.endswith(".md.disabled")
+        if not (entry.endswith(".md") or (include_disabled_ext and is_disabled_ext)):
             continue
         entry_path = os.path.join(dir_path, entry)
-        info = parse_rule_file(entry_path, tier, fallback_name=entry.replace(".md", ""))
+        fallback = entry.replace(".md.disabled", "").replace(".md", "")
+        info = parse_rule_file(entry_path, tier, fallback_name=fallback)
         if info:
             rules[info.name] = info
 
@@ -230,6 +265,7 @@ def parse_subagent_file(file_path: str, tier: str, fallback_name: Optional[str] 
         name = fallback_name or os.path.basename(file_path).replace(".md", "")
         role = "Specialized Agent"
         description = "Subagent worker"
+        extra = {}
 
         if match:
             frontmatter_str = match.group(1)
@@ -246,6 +282,7 @@ def parse_subagent_file(file_path: str, tier: str, fallback_name: Optional[str] 
         # Subagent declaration token cost in system prompt
         decl = f"- {name}: {role}. {description}"
         tokens = estimate_tokens(decl)
+        author = detect_author(name, file_path, tier, extra.get("author"))
 
         return SubagentInfo(
             name=name,
@@ -257,20 +294,25 @@ def parse_subagent_file(file_path: str, tier: str, fallback_name: Optional[str] 
             lines_count=line_count,
             token_cost=tokens,
             collection=detect_collection(name),
+            author=author,
         )
     except Exception:
         return None
 
-def scan_subagents_dir(dir_path: str, tier: str) -> Dict[str, SubagentInfo]:
+def scan_subagents_dir(dir_path: str, tier: str, include_disabled_ext: bool = False) -> Dict[str, SubagentInfo]:
     subagents: Dict[str, SubagentInfo] = {}
     if not os.path.isdir(dir_path):
         return subagents
 
     for entry in sorted(os.listdir(dir_path)):
-        if entry.startswith(".") or not entry.endswith(".md"):
+        if entry.startswith("."):
+            continue
+        is_disabled_ext = entry.endswith(".md.disabled")
+        if not (entry.endswith(".md") or (include_disabled_ext and is_disabled_ext)):
             continue
         entry_path = os.path.join(dir_path, entry)
-        info = parse_subagent_file(entry_path, tier, fallback_name=entry.replace(".md", ""))
+        fallback = entry.replace(".md.disabled", "").replace(".md", "")
+        info = parse_subagent_file(entry_path, tier, fallback_name=fallback)
         if info:
             subagents[info.name] = info
 
