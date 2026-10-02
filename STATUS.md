@@ -15,13 +15,14 @@
   - Avoid putting raw HTML or `<code>` tags in terminal outputs and diagram nodes.
 
 ### 3. Frontier & Fog of War
-- **Current Objective**: Package initial v0.1.0 release, symlink binary into PATH, and verify interactive CLI end-to-end.
+- **Current Objective**: Implement GitHub sparse registry index crawler for community packages (`agy-skills search --remote`, `agy-skills install <author>/<skill>`).
 - **Next in Queue**:
-  1. Add curses-based interactive full-screen browser (`agy-skills browse`).
-  2. Implement GitHub sparse registry index crawler for community packages.
+  1. Community registry index crawler & remote schema.
+  2. One-click install from remote GitHub URLs / registry.
   3. Prepare for `agyskills.sh` domain deployment on launch day.
 - **Blocked / Waiting**: None.
 - **Fog of War (Unspecified)**: None.
 
 ### 4. Decisions & Log
+- `2026-10-02`: Implemented interactive dual-pane curses TUI browser (`agy_skills/browse.py`, `agy-skills browse` / `tui` / `ui`). Added real-time navigation, live preview rendering, inline search (`/`), scope cycle (`Tab`), and atomic toggle enable/disable (`Space`/`Enter`). Test suite expanded to 8 tests passing.
 - `2026-10-02`: Initialized standalone repository for `agy-skills`. Implemented multi-scope resolver (`workspace`, `shared`, `global`), frontmatter parser, non-destructive symlink engine, and Antigravity-native terminal viewer. 5/5 unit tests passing.

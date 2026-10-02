@@ -3,6 +3,7 @@ import argparse
 from .scope import resolve_scope
 from .manager import SkillManager
 from .viewer import render_skill_view, display_skill_interactive
+from .browse import open_browser
 from .__init__ import __version__
 
 def main(args=None):
@@ -16,6 +17,9 @@ def main(args=None):
     parser.add_argument("-v", "--version", action="version", version=f"agy-skills {__version__}")
     
     subparsers = parser.add_subparsers(dest="command", help="Available commands")
+
+    # browse
+    browse_p = subparsers.add_parser("browse", aliases=["tui", "ui"], help="Launch interactive dual-pane TUI browser")
 
     # list
     list_p = subparsers.add_parser("list", help="List all discovered skills across tiers")
@@ -56,6 +60,10 @@ def main(args=None):
         return
 
     scope = resolve_scope()
+    if parsed.command in ("browse", "tui", "ui"):
+        open_browser()
+        return
+
     mgr = SkillManager(scope)
 
     if parsed.command == "list":
