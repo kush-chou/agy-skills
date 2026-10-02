@@ -117,5 +117,26 @@ class TestBrowser(unittest.TestCase):
         self.assertFalse(self.browser.edit_dirty)
         self.assertNotIn("Another unwanted edit", self.browser.edit_lines)
 
+    def test_batch_toggle_collection(self):
+        # Create a catalog skill in @android collection
+        android_dir = os.path.join(self.test_root, "catalog", "android-tool")
+        os.makedirs(android_dir, exist_ok=True)
+        with open(os.path.join(android_dir, "SKILL.md"), "w") as f:
+            f.write("---\nname: android-tool\ndescription: Android tool\n---\n")
+
+        self.scope.catalog_dirs = [os.path.join(self.test_root, "catalog")]
+        self.browser.active_tab = TAB_PLUGINS
+        items = self.browser.get_items_for_current_tab()
+        selectable = self.browser.get_selectable_indices(items)
+        self.assertGreater(len(selectable), 0)
+
+        # Batch activate @android
+        msg = self.browser.batch_toggle_collection("@android", enable=True)
+        self.assertIn("Activated", msg)
+
+        # Batch disable @android
+        msg_disable = self.browser.batch_toggle_collection("@android", enable=False)
+        self.assertIn("Disabled", msg_disable)
+
 if __name__ == "__main__":
     unittest.main()

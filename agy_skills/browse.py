@@ -1,4 +1,5 @@
 import os
+os.environ.setdefault('ESCDELAY', '25')
 import curses
 import textwrap
 from typing import List, Tuple, Optional, Dict, Any
@@ -132,7 +133,8 @@ class SkillBrowser:
             for coll_name in sorted(collections.keys()):
                 group_items = collections[coll_name]
                 active_count = sum(1 for _, is_act, _ in group_items if is_act)
-                items.append((True, f"📦 {coll_name} ({active_count}/{len(group_items)} active) [a:All d:None]", None, False, "plugin"))
+                all_active = (active_count == len(group_items))
+                items.append((True, f"◆ {coll_name} ({active_count}/{len(group_items)} active) [a:All d:None]", coll_name, all_active, "plugin"))
                 for obj, is_act, itype in sorted(group_items, key=lambda x: x[0].name):
                     items.append((False, obj.name, obj, is_act, itype))
             return items
@@ -140,10 +142,69 @@ class SkillBrowser:
         return []
 
     def get_selectable_indices(self, items) -> List[int]:
-        return [i for i, item in enumerate(items) if not item[0]]
+        selectable = []
+        for i, item in enumerate(items):
+            is_header = item[0]
+            info = item[2]
+            itype = item[4]
+            if is_header:
+                if itype == "plugin" and info is not None:
+                    selectable.append(i)
+            else:
+                selectable.append(i)
+        return selectable
+
+    def _get_current_collection(self, item) -> Optional[str]:
+        if not item:
+            return None
+        is_header, label, info, is_act, itype = item
+        if itype == "plugin" and isinstance(info, str):
+            return info
+        if info and hasattr(info, "collection"):
+            return info.collection
+        return None
+
+    def batch_toggle_collection(self, coll_name: str, enable: bool) -> str:
+        """Enable or disable all skills and rules in a collection."""
+        ws, shared, builtin, catalog = self.mgr.scan_all()
+        all_skills = {**ws, **shared, **builtin, **catalog}
+        rules_active, rules_avail = self.mgr.scan_rules()
+        all_rules = {**rules_active, **rules_avail}
+
+        count = 0
+        for s in all_skills.values():
+            if s.collection == coll_name:
+                if enable:
+                    if s.tier not in ("workspace", "shared", "builtin"):
+                        ok, _ = self.mgr.enable(s.name, target_tier=self.target_scope)
+                        if ok:
+                            count += 1
+                else:
+                    if s.tier not in ("builtin", "catalog"):
+                        ok, _ = self.mgr.disable(s.name, target_tier=s.tier)
+                        if ok:
+                            count += 1
+
+        for r in all_rules.values():
+            if r.collection == coll_name:
+                if enable:
+                    if r.name not in rules_active:
+                        ok, _ = self.mgr.enable_rule(r.name, target_tier=self.target_scope)
+                        if ok:
+                            count += 1
+                else:
+                    if r.name in rules_active:
+                        ok, _ = self.mgr.disable_rule(r.name, target_tier=r.tier)
+                        if ok:
+                            count += 1
+
+        self.preview_cache.clear()
+        action_verb = "Activated" if enable else "Disabled"
+        return f"✔ {action_verb} {count} items in '{coll_name}'."
 
     def load_item_preview(self, info: Any, itype: str, width: int) -> List[Tuple[str, str]]:
-        cache_key = f"{info.path}_{width}_{itype}"
+        info_id = getattr(info, "path", str(info))
+        cache_key = f"{info_id}_{width}_{itype}"
         if cache_key in self.preview_cache:
             return self.preview_cache[cache_key]
 
@@ -151,6 +212,48 @@ class SkillBrowser:
         box_w = max(30, min(width - 4, 76))
         top_border = "┌" + "─" * (box_w - 2) + "┐"
         bot_border = "└" + "─" * (box_w - 2) + "┘"
+
+        if itype == "plugin" and isinstance(info, str):
+            coll_name = info
+            ws, shared, builtin, catalog = self.mgr.scan_all()
+            all_skills = {**ws, **shared, **builtin, **catalog}
+            rules_active, rules_avail = self.mgr.scan_rules()
+            all_rules = {**rules_active, **rules_avail}
+
+            c_skills = [s for s in all_skills.values() if s.collection == coll_name]
+            c_rules = [r for r in all_rules.values() if r.collection == coll_name]
+            total_items = len(c_skills) + len(c_rules)
+            active_skills = sum(1 for s in c_skills if s.tier in ("workspace", "shared", "builtin"))
+            active_rules = sum(1 for r in c_rules if r.name in rules_active)
+            active_total = active_skills + active_rules
+
+            out.append((top_border, "border"))
+            out.append((f"│  {coll_name}".ljust(box_w - 2) + "│", "hero_title"))
+            meta = f"  Type: PLUGIN / COLLECTION · Status: {active_total}/{total_items} Active"
+            out.append((f"│{meta.ljust(box_w - 2)}│", "hero_meta"))
+            hint = f"  Batch: [a] Activate All  ·  [d] Deactivate All"
+            out.append((f"│{hint.ljust(box_w - 2)}│", "hero_desc"))
+            out.append((bot_border, "border"))
+            out.append(("", "normal"))
+
+            if c_skills:
+                out.append((f"Bundled Skills ({len(c_skills)}):", "heading"))
+                for s in sorted(c_skills, key=lambda x: x.name):
+                    act_tag = "● active" if s.tier in ("workspace", "shared", "builtin") else "○ available"
+                    out.append((f"  • {s.name} (~{s.token_cost}t) [{act_tag}]", "normal"))
+                    if s.description:
+                        out.append((f"      {s.description[:box_w - 8]}", "code"))
+                out.append(("", "normal"))
+
+            if c_rules:
+                out.append((f"Bundled Rules ({len(c_rules)}):", "heading"))
+                for r in sorted(c_rules, key=lambda x: x.name):
+                    act_tag = "● active" if r.name in rules_active else "○ available"
+                    out.append((f"  • {r.name} (~{r.token_cost}t) [{act_tag}]", "normal"))
+                out.append(("", "normal"))
+
+            self.preview_cache[cache_key] = out
+            return out
 
         out.append((top_border, "border"))
         title_content = f"  {info.name}"
@@ -238,7 +341,7 @@ class SkillBrowser:
         return out
 
     def enter_edit_mode(self, info: Any, itype: str):
-        if not info or not os.path.isfile(info.path):
+        if not info or not hasattr(info, "path") or not os.path.isfile(info.path):
             self.status_msg = "Cannot edit: source file not found."
             return
         try:
@@ -327,7 +430,11 @@ class SkillBrowser:
         curses.wrapper(self._main_loop)
 
     def _main_loop(self, stdscr):
+        os.environ.setdefault('ESCDELAY', '25')
         curses.use_default_colors()
+        curses.noecho()
+        curses.cbreak()
+        stdscr.keypad(True)
         stdscr.timeout(-1)
 
         # Color pairs setup
@@ -370,7 +477,7 @@ class SkillBrowser:
                 avail = max_x - x
                 if y == max_y - 1:
                     avail = max(0, avail - 1)
-                t = str(text)[:avail]
+                t = str(text).replace("\r", "").split("\n")[0][:avail]
                 if t:
                     try:
                         stdscr.addstr(y, x, t, attr)
@@ -384,7 +491,7 @@ class SkillBrowser:
             
             proj_name = os.path.basename(self.scope.workspace_root) if self.scope.workspace_root else "GLOBAL"
             mode_tag = " [NANO EDIT MODE]" if self.edit_mode else ""
-            header_left = f" ⚡ agy-skills [{proj_name}]{mode_tag}"
+            header_left = f" ✦ agy-skills [{proj_name}]{mode_tag}"
             padding = max(0, max_x - len(header_left) - len(budget_str) - 2)
             full_header = header_left + (" " * padding) + budget_str + " "
             safe_addstr(0, 0, full_header[:max_x], curses.color_pair(6) | curses.A_BOLD)
@@ -406,8 +513,8 @@ class SkillBrowser:
             right_width = max_x - left_width - 1
             content_height = max_y - 4
 
-            # Draw Vertical Divider
-            for y in range(1, max_y - 2):
+            # Draw Vertical Divider (starts at row 2 so tab bar row 1 is never overwritten)
+            for y in range(2, max_y - 2):
                 if left_width < max_x:
                     try:
                         stdscr.addch(y, left_width, curses.ACS_VLINE, curses.color_pair(7) | curses.A_DIM)
@@ -427,7 +534,10 @@ class SkillBrowser:
                 is_header, label, info, is_active, itype = items[idx]
 
                 if is_header:
-                    safe_addstr(row, 1, label[:left_width-2], curses.color_pair(4) | curses.A_BOLD)
+                    if idx == selected_item_idx:
+                        safe_addstr(row, 0, f" {label[:left_width-1]}".ljust(left_width), curses.color_pair(5) | curses.A_BOLD)
+                    else:
+                        safe_addstr(row, 1, label[:left_width-2], curses.color_pair(4) | curses.A_BOLD)
                 else:
                     is_selected = (idx == selected_item_idx)
                     bullet = "●" if is_active else "○"
@@ -540,7 +650,7 @@ class SkillBrowser:
 
             if self.save_modal:
                 if self.save_intent == "exit":
-                    prompt = " ⚠️  Unsaved Changes: [S] Save & Exit  |  [F] Fork '(user)' & Exit  |  [D] Discard & Exit  |  [Esc] Cancel"
+                    prompt = " [!] Unsaved Changes: [S] Save & Exit  |  [F] Fork '(user)' & Exit  |  [D] Discard & Exit  |  [Esc] Cancel"
                     safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
                     safe_addstr(help_y, 0, " Choose destination, [D] to discard edits and exit, or [Esc] to resume editing.".ljust(max_x), curses.A_DIM)
                 else:
@@ -558,16 +668,17 @@ class SkillBrowser:
                 safe_addstr(help_y, 0, nano_help.ljust(max_x), curses.color_pair(8))
 
             elif self.search_mode:
-                prompt = f" 🔍 Filter: /{self.query}█"
+                prompt = f" / Filter: /{self.query}█"
                 safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
                 safe_addstr(help_y, 0, " Type search string... Press Enter to confirm, Esc to cancel".ljust(max_x), curses.A_DIM)
             elif self.status_msg:
-                safe_addstr(footer_y, 0, f"  {self.status_msg}".ljust(max_x), curses.color_pair(2) | curses.A_BOLD)
-                help_bar = " [1-4] Tabs  [↑/↓] Nav  [Space] Toggle  [e] Edit in Nano  [Tab] Scope  [/] Filter  [q] Quit"
+                status_text = self.status_msg.replace("\r", "").split("\n")[0]
+                safe_addstr(footer_y, 0, f"  {status_text}".ljust(max_x), curses.color_pair(2) | curses.A_BOLD)
+                help_bar = " [1-4] Tabs  [↑/↓] Nav  [Space] Toggle  [a/d] All/None  [e] Edit  [Tab] Scope  [/] Filter  [q] Quit"
                 safe_addstr(help_y, 0, help_bar.ljust(max_x), curses.A_DIM)
             else:
                 safe_addstr(footer_y, 0, " " * (max_x - 1))
-                help_bar = " [1-4] Tabs  [↑/↓] Nav  [Space] Toggle  [e] Edit in Nano  [Tab] Scope  [/] Filter  [q] Quit"
+                help_bar = " [1-4] Tabs  [↑/↓] Nav  [Space] Toggle  [a/d] All/None  [e] Edit  [Tab] Scope  [/] Filter  [q] Quit"
                 safe_addstr(help_y, 0, help_bar.ljust(max_x), curses.A_DIM)
 
             # Move hardware cursor to current position in Nano editor right before refresh
@@ -813,12 +924,32 @@ class SkillBrowser:
                 self.search_mode = True
                 self.status_msg = ""
 
-            elif ch in (ord(' '), 10, 13):
-                if selected_item_idx != -1 and items[selected_item_idx][2]:
-                    sel_info = items[selected_item_idx][2]
-                    _, _, _, is_active, itype = items[selected_item_idx]
+            elif ch in (ord('a'), ord('A')):
+                if selected_item_idx != -1:
+                    coll = self._get_current_collection(items[selected_item_idx])
+                    if coll:
+                        self.status_msg = self.batch_toggle_collection(coll, enable=True)
+                    else:
+                        self.status_msg = "No collection found for active selection."
 
-                    if itype == "skill":
+            elif ch in (ord('d'), ord('D')):
+                if selected_item_idx != -1:
+                    coll = self._get_current_collection(items[selected_item_idx])
+                    if coll:
+                        self.status_msg = self.batch_toggle_collection(coll, enable=False)
+                    else:
+                        self.status_msg = "No collection found for active selection."
+
+            elif ch in (ord(' '), 10, 13):
+                if selected_item_idx != -1 and items[selected_item_idx][2] is not None:
+                    item = items[selected_item_idx]
+                    is_hdr, label, sel_info, is_active, itype = item
+
+                    if is_hdr and itype == "plugin" and isinstance(sel_info, str):
+                        # Toggle entire collection
+                        self.status_msg = self.batch_toggle_collection(sel_info, enable=not is_active)
+
+                    elif itype == "skill":
                         if is_active:
                             if sel_info.tier == "builtin":
                                 self.status_msg = f"Built-in skill '{sel_info.name}' is immutable."
