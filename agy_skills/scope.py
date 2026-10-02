@@ -50,6 +50,7 @@ def resolve_scope(cwd: Optional[str] = None) -> ScopeContext:
     builtin_skills = next((p for p in builtin_candidates if os.path.isdir(p)), builtin_candidates[0])
 
     catalog_dirs = [
+        os.path.join(home, ".android", "cli", "skills"),
         os.path.join(global_agents, "catalog"),
         os.path.join(home, ".agents.backup", "skills"),
         os.path.join(home, ".cache", "agy-skills", "store"),

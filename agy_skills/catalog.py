@@ -13,18 +13,46 @@ def estimate_tokens(text: str) -> int:
 
 def detect_collection(name: str) -> str:
     n = name.lower()
+
+    # Google Official Built-ins
+    if n in ("antigravity-guide", "antigravity_guide", "agy-customizations", "generative_ui",
+            "migrate-workflows", "permissioned-github", "ui-extension", "ui-plugin-navigation",
+            "plugin", "automation"):
+        return "@google/antigravity-builtin"
+
+    # Google Stitch Suite
     if n.startswith("stitch-") or "stitch" in n:
         return "@google/stitch"
+
+    # Google LiteRT Suite
     if n.startswith("litert-") or "litert" in n or "quantization" in n:
         return "@google/litert"
-    if "android" in n or n.startswith("r8-") or "appfunctions" in n:
+
+    # Android Suite
+    if ("android" in n or n.startswith("r8-") or "appfunctions" in n or "camerax" in n or
+        "navigation" in n or "edge-to-edge" in n or "wear-compose" in n or "leanback" in n or
+        "glimmer" in n or "media3" in n or "play-billing" in n or "play-policy" in n or
+        "engage-sdk" in n or "agp-9" in n or n == "styles" or n == "adaptive" or
+        "migrate-xml-views-to-jetpack-compose" in n or "restore-credentials" in n or "verified-email" in n):
         return "@android"
-    if "matt" in n or "ts-" in n or n in ("teach", "spec-driven-development", "setup-ts-deep-modules"):
+
+    # Matt Pocock Engineering Skills
+    if ("matt" in n or "ts-" in n or n in (
+        "teach", "spec-driven-development", "setup-ts-deep-modules", "setup-matt-pocock-skills",
+        "to-spec", "to-tickets", "to-questionnaire", "implement-spec", "diagnosing-bugs",
+        "scaffold-exercises", "triage", "wayfinder", "ask-matt", "code-simplification",
+        "domain-modeling", "codebase-design", "improve-codebase-architecture"
+    )):
         return "@mattpocock"
-    if "addy" in n or "perf" in n or "web-performance" in n:
+
+    # Addy Osmani Engineering Skills
+    if "addy" in n or "perf" in n or "web-performance" in n or n in ("cuttle", "performance-optimization"):
         return "@addyosmani"
-    if n in ("karpathy-principles", "torvalds-principles", "mantis", "nautilus", "cuttle"):
+
+    # Antigravity Philosophy & Agents
+    if n in ("karpathy-principles", "torvalds-principles", "mantis", "nautilus", "conversational-cadence", "mutual-amplification", "visual-priming", "context-hygiene", "surgical-inference", "tasteful-abstraction"):
         return "@antigravity/principles"
+
     return "@community/core"
 
 def parse_simple_frontmatter(content: str) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
@@ -115,20 +143,15 @@ def scan_skills_dir(dir_path: str, tier: str) -> Dict[str, SkillInfo]:
     if not os.path.isdir(dir_path):
         return skills
 
-    for entry in sorted(os.listdir(dir_path)):
-        if entry.startswith("."):
-            continue
-        entry_path = os.path.join(dir_path, entry)
+    # Recursively find all SKILL.md files (following symlinks for active directories)
+    for root, dirs, files in os.walk(dir_path, followlinks=True):
+        # Exclude hidden directories
+        dirs[:] = [d for d in dirs if not d.startswith(".")]
 
-        if os.path.isdir(entry_path):
-            skill_md = os.path.join(entry_path, "SKILL.md")
-            if os.path.isfile(skill_md):
-                info = parse_skill_file(skill_md, tier, fallback_name=entry)
-                if info:
-                    skills[info.name] = info
-        elif entry == "SKILL.md" and os.path.isfile(entry_path):
-            fallback = os.path.basename(dir_path)
-            info = parse_skill_file(entry_path, tier, fallback_name=fallback)
+        if "SKILL.md" in files:
+            skill_md = os.path.join(root, "SKILL.md")
+            fallback = os.path.basename(root)
+            info = parse_skill_file(skill_md, tier, fallback_name=fallback)
             if info:
                 skills[info.name] = info
 
