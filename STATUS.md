@@ -1,7 +1,7 @@
 # Project Status & Wayfinding
 
 ### 1. Ground Truth & Verification
-- **Workspace**: `/Users/kush-chou/.gemini/antigravity/scratch/agy-skills`
+- **Workspace**: `/Users/kush-chou/Projects/agy-skills`
 - **Active Branch**: `main (clean)`
 - **Verification Command**: `python3 -m unittest discover -s tests`
 - **Deployment / Runtime Env**: macOS Darwin / Python 3.9+ / Google Antigravity & Gemini CLI runtime
