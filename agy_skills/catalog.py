@@ -1,15 +1,38 @@
 import os
 import re
-from typing import Optional, Dict, List
-from .types import SkillInfo
+from typing import Optional, Dict, List, Tuple
+from .types import SkillInfo, RuleInfo, SubagentInfo
 
 FRONTMATTER_REGEX = re.compile(r"^---\r?\n([\s\S]*?)\r?\n---(?:\r?\n([\s\S]*))?")
 
-def parse_simple_frontmatter(content: str) -> tuple[Optional[str], Optional[str]]:
+def estimate_tokens(text: str) -> int:
+    """Estimates tokens using standard LLM ratio ~3.8 characters per token."""
+    if not text:
+        return 0
+    return max(1, int(len(text) / 3.8))
+
+def detect_collection(name: str) -> str:
+    n = name.lower()
+    if n.startswith("stitch-") or "stitch" in n:
+        return "@google/stitch"
+    if n.startswith("litert-") or "litert" in n or "quantization" in n:
+        return "@google/litert"
+    if "android" in n or n.startswith("r8-") or "appfunctions" in n:
+        return "@android"
+    if "matt" in n or "ts-" in n or n in ("teach", "spec-driven-development", "setup-ts-deep-modules"):
+        return "@mattpocock"
+    if "addy" in n or "perf" in n or "web-performance" in n:
+        return "@addyosmani"
+    if n in ("karpathy-principles", "torvalds-principles", "mantis", "nautilus", "cuttle"):
+        return "@antigravity/principles"
+    return "@community/core"
+
+def parse_simple_frontmatter(content: str) -> Tuple[Optional[str], Optional[str], Dict[str, str]]:
     lines = content.splitlines()
     name = None
     desc_lines = []
     in_desc = False
+    extra: Dict[str, str] = {}
 
     for line in lines:
         name_match = re.match(r"^\s*name:\s*(.*)$", line)
@@ -28,6 +51,16 @@ def parse_simple_frontmatter(content: str) -> tuple[Optional[str], Optional[str]
             in_desc = True
             continue
 
+        role_match = re.match(r"^\s*role:\s*(.*)$", line)
+        if role_match:
+            extra["role"] = role_match.group(1).strip().strip("'\"")
+            continue
+
+        always_match = re.match(r"^\s*always_on:\s*(.*)$", line)
+        if always_match:
+            extra["always_on"] = always_match.group(1).strip().lower()
+            continue
+
         if in_desc:
             if re.match(r"^[ \t]+\S", line):
                 desc_lines.append(line.strip().strip("'\""))
@@ -35,7 +68,7 @@ def parse_simple_frontmatter(content: str) -> tuple[Optional[str], Optional[str]
                 in_desc = False
 
     description = " ".join(desc_lines).strip() if desc_lines else None
-    return name, description
+    return name, description, extra
 
 def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = None) -> Optional[SkillInfo]:
     if not os.path.isfile(file_path):
@@ -49,7 +82,7 @@ def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = N
         name, description = None, None
         if match:
             frontmatter_str = match.group(1)
-            name, description = parse_simple_frontmatter(frontmatter_str)
+            name, description, _ = parse_simple_frontmatter(frontmatter_str)
 
         if not name:
             name = fallback_name or os.path.basename(os.path.dirname(file_path))
@@ -59,6 +92,10 @@ def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = N
         line_count = len(content.splitlines())
         is_link = os.path.islink(file_path) or os.path.islink(os.path.dirname(file_path))
 
+        # Only the declaration (name + desc + path) counts toward always-on prompt budget for skills
+        skill_decl = f"- {name}: {description}\nPath: {file_path}"
+        tokens = estimate_tokens(skill_decl)
+
         return SkillInfo(
             name=name,
             description=description,
@@ -67,6 +104,8 @@ def parse_skill_file(file_path: str, tier: str, fallback_name: Optional[str] = N
             is_symlink=is_link,
             is_builtin=(tier == "builtin"),
             lines_count=line_count,
+            token_cost=tokens,
+            collection=detect_collection(name),
         )
     except Exception:
         return None
@@ -81,14 +120,12 @@ def scan_skills_dir(dir_path: str, tier: str) -> Dict[str, SkillInfo]:
             continue
         entry_path = os.path.join(dir_path, entry)
 
-        # Case 1: entry is a directory (or symlink to dir) containing SKILL.md
         if os.path.isdir(entry_path):
             skill_md = os.path.join(entry_path, "SKILL.md")
             if os.path.isfile(skill_md):
                 info = parse_skill_file(skill_md, tier, fallback_name=entry)
                 if info:
                     skills[info.name] = info
-        # Case 2: entry itself is SKILL.md
         elif entry == "SKILL.md" and os.path.isfile(entry_path):
             fallback = os.path.basename(dir_path)
             info = parse_skill_file(entry_path, tier, fallback_name=fallback)
@@ -96,6 +133,125 @@ def scan_skills_dir(dir_path: str, tier: str) -> Dict[str, SkillInfo]:
                 skills[info.name] = info
 
     return skills
+
+def parse_rule_file(file_path: str, tier: str, fallback_name: Optional[str] = None) -> Optional[RuleInfo]:
+    if not os.path.isfile(file_path):
+        return None
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+
+        match = FRONTMATTER_REGEX.match(content)
+        name = fallback_name or os.path.basename(file_path).replace(".md", "")
+        description = "System invariant rule."
+        is_always_on = True
+
+        if match:
+            frontmatter_str = match.group(1)
+            parsed_name, parsed_desc, extra = parse_simple_frontmatter(frontmatter_str)
+            if parsed_name:
+                name = parsed_name
+            if parsed_desc:
+                description = parsed_desc
+                # If rule has a description frontmatter, Antigravity treats it as conditional
+                is_always_on = False
+            if "always_on" in extra:
+                is_always_on = (extra["always_on"] == "true")
+
+        line_count = len(content.splitlines())
+        is_link = os.path.islink(file_path)
+
+        # Full body is injected into prompt if always-on; only description if conditional
+        cost_text = content if is_always_on else f"- {file_path}: {description}"
+        tokens = estimate_tokens(cost_text)
+
+        return RuleInfo(
+            name=name,
+            description=description,
+            path=file_path,
+            tier=tier,
+            is_always_on=is_always_on,
+            is_symlink=is_link,
+            lines_count=line_count,
+            token_cost=tokens,
+            collection=detect_collection(name),
+        )
+    except Exception:
+        return None
+
+def scan_rules_dir(dir_path: str, tier: str) -> Dict[str, RuleInfo]:
+    rules: Dict[str, RuleInfo] = {}
+    if not os.path.isdir(dir_path):
+        return rules
+
+    for entry in sorted(os.listdir(dir_path)):
+        if entry.startswith(".") or not entry.endswith(".md"):
+            continue
+        entry_path = os.path.join(dir_path, entry)
+        info = parse_rule_file(entry_path, tier, fallback_name=entry.replace(".md", ""))
+        if info:
+            rules[info.name] = info
+
+    return rules
+
+def parse_subagent_file(file_path: str, tier: str, fallback_name: Optional[str] = None) -> Optional[SubagentInfo]:
+    if not os.path.isfile(file_path):
+        return None
+
+    try:
+        with open(file_path, "r", encoding="utf-8", errors="replace") as f:
+            content = f.read()
+
+        match = FRONTMATTER_REGEX.match(content)
+        name = fallback_name or os.path.basename(file_path).replace(".md", "")
+        role = "Specialized Agent"
+        description = "Subagent worker"
+
+        if match:
+            frontmatter_str = match.group(1)
+            parsed_name, parsed_desc, extra = parse_simple_frontmatter(frontmatter_str)
+            if parsed_name:
+                name = parsed_name
+            if parsed_desc:
+                description = parsed_desc
+            if "role" in extra:
+                role = extra["role"]
+
+        line_count = len(content.splitlines())
+        is_link = os.path.islink(file_path)
+        # Subagent declaration token cost in system prompt
+        decl = f"- {name}: {role}. {description}"
+        tokens = estimate_tokens(decl)
+
+        return SubagentInfo(
+            name=name,
+            role=role,
+            description=description,
+            path=file_path,
+            tier=tier,
+            is_symlink=is_link,
+            lines_count=line_count,
+            token_cost=tokens,
+            collection=detect_collection(name),
+        )
+    except Exception:
+        return None
+
+def scan_subagents_dir(dir_path: str, tier: str) -> Dict[str, SubagentInfo]:
+    subagents: Dict[str, SubagentInfo] = {}
+    if not os.path.isdir(dir_path):
+        return subagents
+
+    for entry in sorted(os.listdir(dir_path)):
+        if entry.startswith(".") or not entry.endswith(".md"):
+            continue
+        entry_path = os.path.join(dir_path, entry)
+        info = parse_subagent_file(entry_path, tier, fallback_name=entry.replace(".md", ""))
+        if info:
+            subagents[info.name] = info
+
+    return subagents
 
 def load_catalog_map(catalog_dirs: List[str]) -> Dict[str, SkillInfo]:
     catalog: Dict[str, SkillInfo] = {}

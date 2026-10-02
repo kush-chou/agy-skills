@@ -1,8 +1,13 @@
 import os
 import shutil
-from typing import Optional, Dict, Tuple
-from .types import SkillInfo, ScopeContext
-from .catalog import scan_skills_dir, load_catalog_map, parse_skill_file
+from typing import Optional, Dict, Tuple, List
+from .types import SkillInfo, RuleInfo, SubagentInfo, ScopeContext, ContextBudget
+from .catalog import (
+    scan_skills_dir,
+    load_catalog_map,
+    scan_rules_dir,
+    scan_subagents_dir,
+)
 
 # ANSI formatting
 BOLD = "\033[1m"
@@ -10,6 +15,7 @@ DIM = "\033[2m"
 CYAN = "\033[36m"
 GREEN = "\033[32m"
 YELLOW = "\033[33m"
+MAGENTA = "\033[35m"
 RESET = "\033[0m"
 
 class SkillManager:
@@ -22,25 +28,68 @@ class SkillManager:
         builtin_skills = scan_skills_dir(self.scope.builtin_skills_dir, tier="builtin")
         catalog_skills = load_catalog_map(self.scope.catalog_dirs)
 
-        # Filter catalog: only include skills not already active in workspace or shared
         active_names = set(workspace_skills.keys()) | set(shared_skills.keys())
         available_catalog = {k: v for k, v in catalog_skills.items() if k not in active_names}
 
         return workspace_skills, shared_skills, builtin_skills, available_catalog
 
+    def scan_rules(self) -> Tuple[Dict[str, RuleInfo], Dict[str, RuleInfo]]:
+        """Returns (active_rules, available_rules)."""
+        active_ws = scan_rules_dir(self.scope.workspace_rules_dir, tier="workspace")
+        active_global = scan_rules_dir(self.scope.global_rules_dir, tier="global")
+
+        # Global rules are active unless overridden by workspace
+        active = {**active_global, **active_ws}
+
+        # Backup / catalog rules if any
+        backup_rules_dir = os.path.join(os.path.expanduser("~"), ".agents.backup", "rules")
+        catalog_rules = scan_rules_dir(backup_rules_dir, tier="catalog")
+        available = {k: v for k, v in catalog_rules.items() if k not in active}
+
+        return active, available
+
+    def scan_subagents(self) -> Tuple[Dict[str, SubagentInfo], Dict[str, SubagentInfo]]:
+        """Returns (active_subagents, available_subagents)."""
+        active_ws = scan_subagents_dir(self.scope.workspace_agents_dir, tier="workspace")
+        active_global = scan_subagents_dir(self.scope.global_agents_subagents_dir, tier="global")
+        active = {**active_global, **active_ws}
+
+        backup_agents_dir = os.path.join(os.path.expanduser("~"), ".agents.backup", "agents")
+        catalog_agents = scan_subagents_dir(backup_agents_dir, tier="catalog")
+        available = {k: v for k, v in catalog_agents.items() if k not in active}
+
+        return active, available
+
+    def calculate_budget(self) -> ContextBudget:
+        ws, shared, builtin, _ = self.scan_all()
+        rules_active, _ = self.scan_rules()
+        subagents_active, _ = self.scan_subagents()
+
+        rules_tok = sum(r.token_cost for r in rules_active.values())
+        skills_tok = sum(s.token_cost for s in ws.values()) + sum(s.token_cost for s in shared.values())
+        agents_tok = sum(a.token_cost for a in subagents_active.values())
+
+        total = rules_tok + skills_tok + agents_tok
+        return ContextBudget(
+            rules_tokens=rules_tok,
+            skills_tokens=skills_tok,
+            subagents_tokens=agents_tok,
+            total_tokens=total,
+            max_tokens=20000,
+        )
+
     def format_list(self) -> str:
         ws, shared, builtin, catalog = self.scan_all()
+        budget = self.calculate_budget()
         total_active = len(ws) + len(shared) + len(builtin)
         total_skills = total_active + len(catalog)
 
         out = []
-        out.append(f"{BOLD}Skills{RESET}")
-        out.append(f"{total_skills} total ({total_active} active · {len(catalog)} available in catalog)\n")
+        out.append(f"{BOLD}Antigravity Context & Skills Manager{RESET}")
+        out.append(f"Context Budget: {budget.total_tokens:,} / {budget.max_tokens:,} tokens ({budget.percentage:.1f}%) "
+                   f"[Rules: {budget.rules_tokens:,} · Skills: {budget.skills_tokens:,} · Agents: {budget.subagents_tokens:,}]\n")
 
-        out.append(f"{BOLD}Create new skills{RESET}")
-        out.append(f"  {DIM}Workspace:{RESET} {self.scope.workspace_skills_dir}/{{skill_name}}/SKILL.md")
-        out.append(f"  {DIM}Shared:   {RESET} {self.scope.shared_skills_dir}/{{skill_name}}/SKILL.md")
-        out.append(f"  {DIM}Global:   {RESET} {os.path.join(self.scope.global_agents_dir, 'skills')}/{{skill_name}}/SKILL.md\n")
+        out.append(f"{BOLD}Skills{RESET}: {total_skills} total ({total_active} active · {len(catalog)} in catalog)\n")
 
         # Workspace Skills
         if ws:
@@ -58,13 +107,6 @@ class SkillManager:
                 out.append(f"  {CYAN}{name}{RESET}: {info.description}")
             out.append("")
 
-        # Built-in Skills
-        if builtin:
-            out.append(f"{BOLD}Built-in skills{RESET} · {DIM}Built-in{RESET}")
-            for name, info in sorted(builtin.items()):
-                out.append(f"  {CYAN}{name}{RESET}: {info.description} {DIM}· built-in{RESET}")
-            out.append("")
-
         # Available Catalog
         if catalog:
             out.append(f"{BOLD}Available in Catalog{RESET} · {DIM}Ready to activate ({len(catalog)} skills){RESET}")
@@ -72,7 +114,7 @@ class SkillManager:
                 out.append(f"  {DIM}⚪ {name}: {info.description}{RESET}")
             out.append("")
 
-        out.append(f"{DIM}Keyboard: ↑/↓ Navigate   enter View   space Toggle   esc Cancel{RESET}")
+        out.append(f"{DIM}Press 'agy-skills browse' for the full interactive TUI & live budget meter.{RESET}")
         return "\n".join(out)
 
     def find_skill(self, name: str) -> Optional[SkillInfo]:
@@ -119,7 +161,6 @@ class SkillManager:
         elif target_tier == "workspace":
             candidates.append(os.path.join(self.scope.workspace_skills_dir, name))
         else:
-            # Check workspace first, then global, then shared
             candidates.extend([
                 os.path.join(self.scope.workspace_skills_dir, name),
                 os.path.join(self.scope.shared_skills_dir, name),
@@ -140,7 +181,6 @@ class SkillManager:
                 os.unlink(found_path)
                 return True, f"✅ Disabled '{name}' (safely unlinked from {found_path})"
             else:
-                # Real directory: preserve to backup before removing if not in catalog
                 catalog_map = load_catalog_map(self.scope.catalog_dirs)
                 if name not in catalog_map:
                     backup_dir = os.path.join(os.path.expanduser("~"), ".agents.backup", "skills", name)

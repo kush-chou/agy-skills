@@ -29,13 +29,19 @@ def resolve_scope(cwd: Optional[str] = None) -> ScopeContext:
 
     if workspace_root:
         workspace_skills = os.path.join(workspace_root, ".agents", "skills")
+        workspace_rules = os.path.join(workspace_root, ".agents", "rules")
+        workspace_agents = os.path.join(workspace_root, ".agents", "agents")
         is_project = True
     else:
         # Fallback when in home or non-repo directory: workspace points to ~/.agents/skills
         workspace_skills = os.path.join(global_agents, "skills")
+        workspace_rules = os.path.join(global_agents, "rules")
+        workspace_agents = os.path.join(global_agents, "agents")
         is_project = False
 
     shared_skills = os.path.join(home, ".gemini", "skills")
+    global_rules = os.path.join(global_agents, "rules")
+    global_subagents = os.path.join(global_agents, "agents")
 
     builtin_candidates = [
         os.path.join(home, ".gemini", "antigravity", "builtin", "skills"),
@@ -57,4 +63,8 @@ def resolve_scope(cwd: Optional[str] = None) -> ScopeContext:
         builtin_skills_dir=builtin_skills,
         catalog_dirs=[d for d in catalog_dirs if os.path.isdir(d)],
         is_project_detected=is_project,
+        workspace_rules_dir=workspace_rules,
+        global_rules_dir=global_rules,
+        workspace_agents_dir=workspace_agents,
+        global_agents_subagents_dir=global_subagents,
     )
