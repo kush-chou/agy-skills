@@ -213,6 +213,12 @@ class SkillBrowser:
         top_border = "┌" + "─" * (box_w - 2) + "┐"
         bot_border = "└" + "─" * (box_w - 2) + "┘"
 
+        def box_line(text: str) -> str:
+            inner_w = box_w - 2
+            content = f"  {text}"
+            trimmed = content[:inner_w]
+            return f"│{trimmed.ljust(inner_w)}│"
+
         if itype == "plugin" and isinstance(info, str):
             coll_name = info
             ws, shared, builtin, catalog = self.mgr.scan_all()
@@ -228,11 +234,9 @@ class SkillBrowser:
             active_total = active_skills + active_rules
 
             out.append((top_border, "border"))
-            out.append((f"│  {coll_name}".ljust(box_w - 2) + "│", "hero_title"))
-            meta = f"  Type: PLUGIN / COLLECTION · Status: {active_total}/{total_items} Active"
-            out.append((f"│{meta.ljust(box_w - 2)}│", "hero_meta"))
-            hint = f"  Batch: [a] Activate All  ·  [d] Deactivate All"
-            out.append((f"│{hint.ljust(box_w - 2)}│", "hero_desc"))
+            out.append((box_line(coll_name), "hero_title"))
+            out.append((box_line(f"Type: COLLECTION · Status: {active_total}/{total_items} Active"), "hero_meta"))
+            out.append((box_line("Actions: [a] Activate All  ·  [d] Deactivate All"), "hero_desc"))
             out.append((bot_border, "border"))
             out.append(("", "normal"))
 
@@ -256,35 +260,30 @@ class SkillBrowser:
             return out
 
         out.append((top_border, "border"))
-        title_content = f"  {info.name}"
-        out.append((f"│{title_content.ljust(box_w - 2)}│", "hero_title"))
+        out.append((box_line(info.name), "hero_title"))
         
         sym_status = " [active link]" if info.is_symlink else ""
-        meta_1 = f"  Type: {itype.upper()} · Tier: {info.tier.upper()} · Tokens: ~{info.token_cost}{sym_status}"
-        out.append((f"│{meta_1.ljust(box_w - 2)}│", "hero_meta"))
+        meta_1 = f"Type: {itype.upper()} · Tier: {info.tier.upper()} · ~{info.token_cost} tok{sym_status}"
+        out.append((box_line(meta_1), "hero_meta"))
 
         author = getattr(info, "author", "Community")
-        meta_author = f"  Author: {author}"
-        out.append((f"│{meta_author.ljust(box_w - 2)}│", "hero_meta"))
+        meta_author = f"Author: {author}"
+        out.append((box_line(meta_author), "hero_meta"))
 
         if itype == "skill":
-            meta_2 = f"  Slash Trigger: /{info.name}"
-            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
+            out.append((box_line(f"Slash Trigger: /{info.name}"), "hero_meta"))
         elif itype == "rule":
             status_str = "ALWAYS-ON" if getattr(info, "is_always_on", False) else "CONDITIONAL"
-            meta_2 = f"  Rule Mode: {status_str}"
-            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
+            out.append((box_line(f"Rule Mode: {status_str}"), "hero_meta"))
         elif itype == "subagent":
-            meta_2 = f"  Role: {getattr(info, 'role', 'Worker')}"
-            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
+            out.append((box_line(f"Role: {getattr(info, 'role', 'Worker')}"), "hero_meta"))
 
         desc = getattr(info, "description", "")
         desc_wrap = textwrap.wrap(desc, width=box_w - 6)
         if desc_wrap:
-            out.append((f"│{' ' * (box_w - 2)}│", "hero_meta"))
+            out.append((box_line(""), "hero_meta"))
             for dw in desc_wrap:
-                line_content = f"  {dw}"
-                out.append((f"│{line_content.ljust(box_w - 2)}│", "hero_desc"))
+                out.append((box_line(dw), "hero_desc"))
 
         out.append((bot_border, "border"))
         out.append(("", "normal"))
