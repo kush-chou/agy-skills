@@ -79,5 +79,43 @@ class TestBrowser(unittest.TestCase):
         fork_path = os.path.join(self.ws_skills, "sample-user", "SKILL.md")
         self.assertTrue(os.path.isfile(fork_path))
 
+    def test_nano_editor_discard_and_exit(self):
+        info = SkillInfo(
+            name="sample",
+            description="Sample skill",
+            path=self.sample_skill,
+            tier="workspace"
+        )
+        self.browser.enter_edit_mode(info, "skill")
+        self.browser.edit_lines.append("Temporary unwanted line")
+        self.browser.edit_dirty = True
+
+        # Discard & Exit
+        self.browser.discard_changes(exit_editor=True)
+        self.assertFalse(self.browser.edit_mode)
+        self.assertFalse(self.browser.edit_dirty)
+
+        # File on disk remains untouched
+        with open(self.sample_skill, "r") as f:
+            content = f.read()
+        self.assertNotIn("Temporary unwanted line", content)
+
+    def test_nano_editor_discard_revert_disk(self):
+        info = SkillInfo(
+            name="sample",
+            description="Sample skill",
+            path=self.sample_skill,
+            tier="workspace"
+        )
+        self.browser.enter_edit_mode(info, "skill")
+        self.browser.edit_lines.append("Another unwanted edit")
+        self.browser.edit_dirty = True
+
+        # Revert in-place (stay in editor)
+        self.browser.discard_changes(exit_editor=False)
+        self.assertTrue(self.browser.edit_mode)
+        self.assertFalse(self.browser.edit_dirty)
+        self.assertNotIn("Another unwanted edit", self.browser.edit_lines)
+
 if __name__ == "__main__":
     unittest.main()

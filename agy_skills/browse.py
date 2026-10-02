@@ -35,7 +35,8 @@ class SkillBrowser:
         self.edit_target_type: str = ""
         self.edit_dirty = False
         self.save_modal = False
-        self.save_prompt_mode = ""  # "save_or_fork"
+        self.save_intent = "write_out"  # "write_out" or "exit"
+        self.cut_buffer: Optional[str] = None
 
     def get_items_for_current_tab(self) -> List[Tuple[bool, str, Optional[Any], bool, str]]:
         q = self.query.strip().lower()
@@ -250,9 +251,33 @@ class SkillBrowser:
             self.edit_scroll_x = 0
             self.edit_dirty = False
             self.save_modal = False
+            self.save_intent = "write_out"
             self.status_msg = f"Nano Editor: editing {info.name}"
         except Exception as e:
             self.status_msg = f"Failed to open editor: {e}"
+
+    def discard_changes(self, exit_editor: bool = True):
+        """Discard in-memory edits. If exit_editor is False, reloads disk copy."""
+        if not exit_editor and self.edit_target_info and os.path.isfile(self.edit_target_info.path):
+            try:
+                with open(self.edit_target_info.path, "r", encoding="utf-8", errors="replace") as f:
+                    self.edit_lines = f.read().splitlines()
+                if not self.edit_lines:
+                    self.edit_lines = [""]
+                self.edit_cur_y = min(self.edit_cur_y, len(self.edit_lines) - 1)
+                self.edit_cur_x = min(self.edit_cur_x, len(self.edit_lines[self.edit_cur_y]))
+                self.edit_dirty = False
+                self.save_modal = False
+                self.status_msg = f"Reverted {self.edit_target_info.name} to disk version."
+                return
+            except Exception as e:
+                self.status_msg = f"Failed to reload file: {e}"
+
+        self.edit_dirty = False
+        self.save_modal = False
+        self.edit_mode = False
+        name = self.edit_target_info.name if self.edit_target_info else "file"
+        self.status_msg = f"Discarded changes to {name}."
 
     def write_out_file(self, fork: bool = False) -> Tuple[bool, str]:
         if not self.edit_target_info:
@@ -421,28 +446,51 @@ class SkillBrowser:
 
             # 4. Render Right Pane (Preview vs Nano Mini-Editor)
             if self.edit_mode:
-                curses.curs_set(1)  # Show cursor in editor
-                # Keep cursor in view
+                # Keep cursor vertically in view
                 if self.edit_cur_y < self.edit_scroll_y:
                     self.edit_scroll_y = self.edit_cur_y
                 elif self.edit_cur_y >= self.edit_scroll_y + visible_rows:
                     self.edit_scroll_y = self.edit_cur_y - visible_rows + 1
 
+                # Keep cursor horizontally in view
+                content_w = max(10, right_width - 3)
+                if self.edit_cur_x < self.edit_scroll_x:
+                    self.edit_scroll_x = self.edit_cur_x
+                elif self.edit_cur_x >= self.edit_scroll_x + content_w:
+                    self.edit_scroll_x = max(0, self.edit_cur_x - content_w + 1)
+
                 e_row = 2
                 for line_idx in range(self.edit_scroll_y, min(len(self.edit_lines), self.edit_scroll_y + visible_rows)):
                     raw_l = self.edit_lines[line_idx]
-                    display_l = raw_l[self.edit_scroll_x:self.edit_scroll_x + right_width - 1]
-                    safe_addstr(e_row, left_width + 2, display_l)
+                    display_l = raw_l[self.edit_scroll_x:self.edit_scroll_x + right_width - 2]
+                    px = left_width + 2
+
+                    if line_idx == self.edit_cur_y and not self.save_modal:
+                        cursor_col = self.edit_cur_x - self.edit_scroll_x
+                        if 0 <= cursor_col < right_width - 2:
+                            before = display_l[:cursor_col]
+                            safe_addstr(e_row, px, before)
+
+                            if cursor_col < len(display_l):
+                                cur_ch = display_l[cursor_col]
+                                after = display_l[cursor_col + 1:]
+                            else:
+                                pad = cursor_col - len(display_l)
+                                if pad > 0:
+                                    safe_addstr(e_row, px + len(before), " " * pad)
+                                cur_ch = " "
+                                after = ""
+
+                            safe_addstr(e_row, px + cursor_col, cur_ch, curses.A_REVERSE | curses.A_BOLD)
+                            if after:
+                                safe_addstr(e_row, px + cursor_col + 1, after)
+                        else:
+                            safe_addstr(e_row, px, display_l)
+                    else:
+                        safe_addstr(e_row, px, display_l)
                     e_row += 1
 
-                # Place hardware cursor
-                screen_cur_y = 2 + (self.edit_cur_y - self.edit_scroll_y)
-                screen_cur_x = left_width + 2 + (self.edit_cur_x - self.edit_scroll_x)
-                if 2 <= screen_cur_y < max_y - 2 and left_width + 2 <= screen_cur_x < max_x:
-                    stdscr.move(screen_cur_y, screen_cur_x)
-
             else:
-                curses.curs_set(0)  # Hide cursor in browse mode
                 if selected_item_idx != -1 and items[selected_item_idx][2]:
                     selected_info = items[selected_item_idx][2]
                     itype = items[selected_item_idx][4]
@@ -487,9 +535,14 @@ class SkillBrowser:
             help_y = max_y - 1
 
             if self.save_modal:
-                prompt = " ^O WriteOut: [Enter/S] Save In-Place  |  [F] Fork as '(user)'  |  [Esc/C] Cancel"
-                safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
-                safe_addstr(help_y, 0, " Choose destination...".ljust(max_x), curses.A_DIM)
+                if self.save_intent == "exit":
+                    prompt = " ⚠️  Unsaved Changes: [S] Save & Exit  |  [F] Fork '(user)' & Exit  |  [D] Discard & Exit  |  [Esc] Cancel"
+                    safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
+                    safe_addstr(help_y, 0, " Choose destination, [D] to discard edits and exit, or [Esc] to resume editing.".ljust(max_x), curses.A_DIM)
+                else:
+                    prompt = " ^O WriteOut: [S] Save In-Place  |  [F] Fork as '(user)'  |  [D] Discard Edits  |  [Esc] Cancel"
+                    safe_addstr(footer_y, 0, prompt.ljust(max_x), curses.color_pair(3) | curses.A_BOLD)
+                    safe_addstr(help_y, 0, " Choose save target, [D] to reload file from disk, or [Esc] to cancel.".ljust(max_x), curses.A_DIM)
 
             elif self.edit_mode:
                 dirty_tag = " [Modified]" if self.edit_dirty else ""
@@ -497,7 +550,7 @@ class SkillBrowser:
                 status_bar = f"  NANO: {self.edit_target_info.name}{dirty_tag}  ·  {cur_pos}"
                 safe_addstr(footer_y, 0, status_bar.ljust(max_x), curses.color_pair(2) | curses.A_BOLD)
 
-                nano_help = " ^O WriteOut (Save/Fork)   ^X Exit   ^K Cut Line   ^U Paste   Arrows/Typing"
+                nano_help = " ^O WriteOut   ^X Exit (Save/Discard)   ^K Cut Line   ^U Paste   Arrows/Esc"
                 safe_addstr(help_y, 0, nano_help.ljust(max_x), curses.color_pair(8))
 
             elif self.search_mode:
@@ -513,12 +566,42 @@ class SkillBrowser:
                 help_bar = " [1-4] Tabs  [↑/↓] Nav  [Space] Toggle  [e] Edit in Nano  [Tab] Scope  [/] Filter  [q] Quit"
                 safe_addstr(help_y, 0, help_bar.ljust(max_x), curses.A_DIM)
 
+            # Move hardware cursor to current position in Nano editor right before refresh
+            if self.edit_mode and not self.save_modal:
+                try:
+                    curses.curs_set(2)
+                except curses.error:
+                    try:
+                        curses.curs_set(1)
+                    except curses.error:
+                        pass
+                screen_cur_y = 2 + (self.edit_cur_y - self.edit_scroll_y)
+                screen_cur_x = left_width + 2 + (self.edit_cur_x - self.edit_scroll_x)
+                if 2 <= screen_cur_y < max_y - 2 and left_width + 2 <= screen_cur_x < max_x:
+                    try:
+                        stdscr.move(screen_cur_y, screen_cur_x)
+                    except curses.error:
+                        pass
+            else:
+                try:
+                    curses.curs_set(0)
+                except curses.error:
+                    pass
+
             stdscr.refresh()
 
             # Handle Input
             try:
                 ch = stdscr.getch()
             except KeyboardInterrupt:
+                if self.edit_mode:
+                    if self.edit_dirty:
+                        self.save_modal = True
+                        self.save_intent = "exit"
+                        continue
+                    else:
+                        self.edit_mode = False
+                        continue
                 break
 
             if ch == -1:
@@ -526,36 +609,87 @@ class SkillBrowser:
 
             # In Save Modal
             if self.save_modal:
+                # Save In-Place
                 if ch in (10, 13, ord('s'), ord('S'), ord('y'), ord('Y')):
                     ok, msg = self.write_out_file(fork=False)
                     self.status_msg = msg
                     self.save_modal = False
+                    if self.save_intent == "exit" and ok:
+                        self.edit_mode = False
+                # Fork as (user)
                 elif ch in (ord('f'), ord('F')):
                     ok, msg = self.write_out_file(fork=True)
                     self.status_msg = msg
                     self.save_modal = False
-                elif ch in (27, ord('c'), ord('C'), 3):  # Esc or Ctrl+C
+                    if self.save_intent == "exit" and ok:
+                        self.edit_mode = False
+                # Discard changes
+                elif ch in (ord('d'), ord('D'), ord('n'), ord('N')):
+                    if self.save_intent == "exit":
+                        self.discard_changes(exit_editor=True)
+                    else:
+                        self.discard_changes(exit_editor=False)
+                # Cancel / Return to editor
+                elif ch in (27, ord('c'), ord('C'), 3):  # Esc, c, C, or Ctrl+C
                     self.save_modal = False
-                    self.status_msg = "Save cancelled."
+                    self.status_msg = "Cancelled. Returned to editor."
                 continue
 
             # In Nano Edit Mode
             if self.edit_mode:
-                # Ctrl+O: Save / Fork dialog
+                # Ctrl+O: WriteOut dialog
                 if ch in (15,):  # Ctrl+O
                     self.save_modal = True
+                    self.save_intent = "write_out"
                     continue
 
-                # Ctrl+X: Exit editor
-                elif ch in (24,):  # Ctrl+X
+                # Ctrl+X or Esc: Exit editor
+                elif ch in (24, 27):  # Ctrl+X or Esc
                     if self.edit_dirty:
                         self.save_modal = True
+                        self.save_intent = "exit"
                     else:
                         self.edit_mode = False
                         self.status_msg = f"Closed editor for {self.edit_target_info.name}."
                     continue
 
+                # Ctrl+K: Cut current line
+                elif ch in (11,):  # Ctrl+K
+                    if self.edit_lines:
+                        self.cut_buffer = self.edit_lines[self.edit_cur_y]
+                        if len(self.edit_lines) > 1:
+                            del self.edit_lines[self.edit_cur_y]
+                            if self.edit_cur_y >= len(self.edit_lines):
+                                self.edit_cur_y = len(self.edit_lines) - 1
+                            self.edit_cur_x = min(self.edit_cur_x, len(self.edit_lines[self.edit_cur_y]))
+                        else:
+                            self.edit_lines[0] = ""
+                            self.edit_cur_x = 0
+                        self.edit_dirty = True
+                        self.status_msg = "Cut 1 line."
+                    continue
+
+                # Ctrl+U: Paste line
+                elif ch in (21,):  # Ctrl+U
+                    if self.cut_buffer is not None:
+                        self.edit_lines.insert(self.edit_cur_y, self.cut_buffer)
+                        self.edit_cur_y += 1
+                        self.edit_cur_x = 0
+                        self.edit_dirty = True
+                        self.status_msg = "Pasted 1 line."
+                    continue
+
                 # Navigation
+                elif ch in (curses.KEY_HOME, 1):  # Home or Ctrl+A
+                    self.edit_cur_x = 0
+                elif ch in (curses.KEY_END, 5):   # End or Ctrl+E
+                    self.edit_cur_x = len(self.edit_lines[self.edit_cur_y])
+                elif ch == curses.KEY_PPAGE:      # Page Up
+                    self.edit_cur_y = max(0, self.edit_cur_y - visible_rows)
+                    self.edit_cur_x = min(self.edit_cur_x, len(self.edit_lines[self.edit_cur_y]))
+                elif ch == curses.KEY_NPAGE:      # Page Down
+                    self.edit_cur_y = min(len(self.edit_lines) - 1, self.edit_cur_y + visible_rows)
+                    self.edit_cur_x = min(self.edit_cur_x, len(self.edit_lines[self.edit_cur_y]))
                 elif ch == curses.KEY_UP:
                     if self.edit_cur_y > 0:
                         self.edit_cur_y -= 1
