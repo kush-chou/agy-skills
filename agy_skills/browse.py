@@ -147,32 +147,36 @@ class SkillBrowser:
             return self.preview_cache[cache_key]
 
         out: List[Tuple[str, str]] = []
-        box_w = max(30, min(width - 2, 74))
+        box_w = max(30, min(width - 4, 76))
         top_border = "┌" + "─" * (box_w - 2) + "┐"
         bot_border = "└" + "─" * (box_w - 2) + "┘"
 
         out.append((top_border, "border"))
-        out.append((f"│  {info.name}".ljust(box_w - 1) + "│", "hero_title"))
+        title_content = f"  {info.name}"
+        out.append((f"│{title_content.ljust(box_w - 2)}│", "hero_title"))
         
-        type_str = f"│  Type: {itype.upper()} · Tier: {info.tier.upper()} · Tokens: ~{info.token_cost}"
-        if info.is_symlink:
-            type_str += " [🔗]"
-        out.append((type_str.ljust(box_w - 1) + "│", "hero_meta"))
+        sym_status = " [active link]" if info.is_symlink else ""
+        meta_1 = f"  Type: {itype.upper()} · Tier: {info.tier.upper()} · Tokens: ~{info.token_cost}{sym_status}"
+        out.append((f"│{meta_1.ljust(box_w - 2)}│", "hero_meta"))
 
         if itype == "skill":
-            out.append((f"│  Slash Trigger: /{info.name}  [Press 'e' to Edit in Nano]".ljust(box_w - 1) + "│", "hero_meta"))
+            meta_2 = f"  Slash Trigger: /{info.name}  [Press 'e' to Edit in Nano]"
+            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
         elif itype == "rule":
             status_str = "ALWAYS-ON" if getattr(info, "is_always_on", False) else "CONDITIONAL"
-            out.append((f"│  Rule Mode: {status_str}  [Press 'e' to Edit in Nano]".ljust(box_w - 1) + "│", "hero_meta"))
+            meta_2 = f"  Rule Mode: {status_str}  [Press 'e' to Edit in Nano]"
+            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
         elif itype == "subagent":
-            out.append((f"│  Role: {getattr(info, 'role', 'Worker')}  [Press 'e' to Edit in Nano]".ljust(box_w - 1) + "│", "hero_meta"))
+            meta_2 = f"  Role: {getattr(info, 'role', 'Worker')}  [Press 'e' to Edit in Nano]"
+            out.append((f"│{meta_2.ljust(box_w - 2)}│", "hero_meta"))
 
         desc = getattr(info, "description", "")
         desc_wrap = textwrap.wrap(desc, width=box_w - 6)
         if desc_wrap:
-            out.append(("│" + " " * (box_w - 2) + "│", "hero_meta"))
+            out.append((f"│{' ' * (box_w - 2)}│", "hero_meta"))
             for dw in desc_wrap:
-                out.append((f"│  {dw}".ljust(box_w - 1) + "│", "hero_desc"))
+                line_content = f"  {dw}"
+                out.append((f"│{line_content.ljust(box_w - 2)}│", "hero_desc"))
 
         out.append((bot_border, "border"))
         out.append(("", "normal"))
@@ -368,13 +372,13 @@ class SkillBrowser:
             tab_bar_padded = tab_bar.ljust(max_x - 22) + f"TARGET: [{self.target_scope.upper()}] "
             safe_addstr(1, 0, tab_bar_padded[:max_x], curses.A_BOLD)
 
-            # Split geometry
-            left_width = min(max(36, max_x // 3), 46)
+            # Split geometry: allow comfortable room for long skill names
+            left_width = min(max(44, max_x // 3 + 4), 54)
             right_width = max_x - left_width - 1
             content_height = max_y - 4
 
             # Draw Vertical Divider
-            for y in range(2, max_y - 2):
+            for y in range(1, max_y - 2):
                 if left_width < max_x:
                     try:
                         stdscr.addch(y, left_width, curses.ACS_VLINE, curses.color_pair(7) | curses.A_DIM)
@@ -398,13 +402,15 @@ class SkillBrowser:
                 else:
                     is_selected = (idx == selected_item_idx)
                     bullet = "●" if is_active else "○"
-                    symlink_tag = "🔗 " if (info and getattr(info, "is_symlink", False)) else ""
+                    symlink_tag = "⇄ " if (info and getattr(info, "is_symlink", False)) else ""
                     color = curses.color_pair(1) if is_active else curses.A_DIM
 
                     tok_tag = f" ~{info.token_cost}t" if info else ""
-                    name_avail = left_width - len(tok_tag) - 7
+                    avail_name_w = left_width - len(tok_tag) - len(symlink_tag) - 6
                     item_name = info.name if info else label
-                    line_str = f"  {bullet} {symlink_tag}{item_name[:name_avail]}".ljust(left_width - len(tok_tag) - 1) + tok_tag
+                    disp_name = item_name[:avail_name_w]
+
+                    line_str = f"  {bullet} {symlink_tag}{disp_name}".ljust(left_width - len(tok_tag) - 1) + tok_tag
 
                     if is_selected:
                         safe_addstr(row, 0, line_str, curses.color_pair(5) | curses.A_BOLD)
@@ -469,11 +475,12 @@ class SkillBrowser:
 
                         p_row += 1
 
+                    # Only show scroll percentage if content actually overflows
                     total_p = len(preview_lines)
-                    if total_p > visible_rows:
+                    if total_p > visible_rows and self.preview_scroll > 0:
                         pct = int((self.preview_scroll / max(1, total_p - visible_rows)) * 100)
                         scroll_tag = f" {pct}% "
-                        safe_addstr(2, max_x - len(scroll_tag) - 2, scroll_tag, curses.color_pair(7) | curses.A_BOLD)
+                        safe_addstr(1, max_x - len(scroll_tag) - 2, scroll_tag, curses.color_pair(7) | curses.A_BOLD)
 
             # 5. Status and Action Deck
             footer_y = max_y - 2
