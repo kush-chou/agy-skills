@@ -12,6 +12,7 @@ from .models import (
     estimate_tokens,
     parse_frontmatter,
 )
+from .plugin_client import AntigravityPluginClient
 from .validator import validate_rule, validate_skill
 
 
@@ -35,6 +36,8 @@ class CustomizationRegistry:
         self.global_config_dir = self.home_dir / ".gemini" / "config"
         self.builtin_dir = self.home_dir / ".gemini" / "antigravity" / "builtin"
         self.token_budget: int = 20_000
+
+        self.plugin_client = AntigravityPluginClient()
 
         self.skills: List[Skill] = []
         self.rules: List[Rule] = []
@@ -161,6 +164,12 @@ class CustomizationRegistry:
         if not plugins_dir.exists() or not plugins_dir.is_dir():
             return
 
+        # Query live state from Antigravity Language Server if available
+        live_plugins_map = {}
+        if self.plugin_client.is_available():
+            for lp in self.plugin_client.get_all_plugins():
+                live_plugins_map[lp["dir"]] = lp
+
         existing_names = {s.name for s in self.skills}
 
         for plug_path in sorted(plugins_dir.iterdir()):
@@ -189,16 +198,23 @@ class CustomizationRegistry:
                                 self.skills.append(skill)
                                 existing_names.add(plug_name)
 
+            # Determine live status & MCP servers
+            live_entry = live_plugins_map.get(plug_name)
+            is_active = (not live_entry.get("disabled", False)) if live_entry else True
+            mcp_servers = live_entry.get("mcp", []) if live_entry else []
+
             # Plugin model
             plugin_desc = f"Antigravity plugin providing {len(plugin_skills)} domain capabilities."
             self.plugins.append(
                 Plugin(
                     name=plug_name,
+                    dir_name=plug_name,
                     path=plug_path,
                     skills_count=len(plugin_skills),
                     skills=plugin_skills,
+                    mcp_servers=mcp_servers,
                     description=plugin_desc,
-                    is_active=True,
+                    is_active=is_active,
                 )
             )
 
@@ -344,8 +360,11 @@ class CustomizationRegistry:
             return item.is_active
         elif isinstance(item, Plugin):
             item.is_active = not item.is_active
-            key = f"plugin:{item.name}"
+            target_key = item.dir_name or item.name
+            key = f"plugin:{target_key}"
             self.active_overrides[key] = item.is_active
+            if self.plugin_client.is_available():
+                self.plugin_client.set_plugin_enabled(target_key, item.is_active)
             return item.is_active
         return False
 

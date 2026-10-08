@@ -206,6 +206,7 @@ class Subagent:
 class Plugin:
     name: str
     path: Path
+    dir_name: str = ""
     tier: str = "INSTALLED"
     scope: Scope = Scope.GLOBAL
     author: str = "Google Cloud / Ecosystem"
