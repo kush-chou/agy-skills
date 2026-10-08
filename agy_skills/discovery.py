@@ -4,6 +4,7 @@ from pathlib import Path
 from typing import Dict, List, Optional, Set, Tuple
 
 from .models import (
+    MCPServer,
     Plugin,
     Rule,
     Scope,
@@ -43,6 +44,7 @@ class CustomizationRegistry:
         self.rules: List[Rule] = []
         self.subagents: List[Subagent] = []
         self.plugins: List[Plugin] = []
+        self.mcp_servers: List[MCPServer] = []
 
         # In-memory toggle states (set of identifiers toggled off or on)
         self.active_overrides: Dict[str, bool] = {}
@@ -53,6 +55,7 @@ class CustomizationRegistry:
         self.rules.clear()
         self.subagents.clear()
         self.plugins.clear()
+        self.mcp_servers.clear()
 
         # 1. Discover Workspace Skills & Rules
         self._discover_workspace()
@@ -69,7 +72,10 @@ class CustomizationRegistry:
         # 5. Discover Subagents (Builtin, Plugins, Workspace)
         self._discover_subagents()
 
-        # 6. Apply override flags and active state overrides
+        # 6. Discover MCP Servers (Antigravity & Plugin MCPs)
+        self._discover_mcp_servers()
+
+        # 7. Apply override flags and active state overrides
         self._apply_states_and_overrides()
 
         # Validate all skills and rules
@@ -299,6 +305,53 @@ class CustomizationRegistry:
                         )
                     )
 
+    def _discover_mcp_servers(self) -> None:
+        """Discover Antigravity root and plugin MCP servers."""
+        mcp_dir = self.home_dir / ".gemini" / "antigravity" / "mcp"
+        if not mcp_dir.is_dir():
+            return
+
+        user_servers = []
+        plugin_servers = []
+
+        for server_dir in sorted(mcp_dir.iterdir()):
+            if not server_dir.is_dir():
+                continue
+
+            name = server_dir.name
+            tools = [
+                f.stem
+                for f in sorted(server_dir.iterdir())
+                if f.suffix == ".json" and f.name != "instructions.md"
+            ]
+
+            instructions = ""
+            inst_file = server_dir / "instructions.md"
+            if inst_file.is_file():
+                try:
+                    instructions = inst_file.read_text(encoding="utf-8", errors="replace")
+                except Exception:
+                    pass
+
+            desc = f"{len(tools)} tools enabled"
+            srv = MCPServer(
+                name=name,
+                tools_count=len(tools),
+                tools=tools,
+                is_active=True,
+                path=server_dir,
+                description=desc,
+                instructions=instructions,
+            )
+
+            # Prioritize root user servers like StitchMCP and canva
+            if "_" in name or name.startswith("data-agent-kit"):
+                plugin_servers.append(srv)
+            else:
+                user_servers.append(srv)
+
+        self.mcp_servers = user_servers + plugin_servers
+
     def _apply_states_and_overrides(self) -> None:
         """Mark overrides and apply user toggle states."""
         # Find which skill names exist in multiple scopes (e.g. workspace overrides global/builtin)
@@ -334,6 +387,11 @@ class CustomizationRegistry:
             if key in self.active_overrides:
                 p.is_active = self.active_overrides[key]
 
+        for m in self.mcp_servers:
+            key = f"mcp:{m.name}"
+            if key in self.active_overrides:
+                m.is_active = self.active_overrides[key]
+
     def toggle_item(self, item, target_scope: Scope = Scope.WORKSPACE) -> bool:
         """Toggle active state of an item."""
         if isinstance(item, Skill):
@@ -366,6 +424,26 @@ class CustomizationRegistry:
             if self.plugin_client.is_available():
                 self.plugin_client.set_plugin_enabled(target_key, item.is_active)
             return item.is_active
+        elif isinstance(item, MCPServer):
+            item.is_active = not item.is_active
+            key = f"mcp:{item.name}"
+            self.active_overrides[key] = item.is_active
+            return item.is_active
+        elif hasattr(item, "repo") and hasattr(item, "is_installed"):
+            # CatalogSkillPack handling
+            from .catalog import install_catalog_pack
+            if not getattr(item, "is_installed", False):
+                target_dir = (
+                    self.workspace_root / ".agents" / "skills"
+                    if target_scope == Scope.WORKSPACE
+                    else self.global_config_dir / "skills"
+                )
+                success, _ = install_catalog_pack(item.name, target_dir, target_scope.value)
+                self.discover_all()
+                return success
+            else:
+                item.is_active = not getattr(item, "is_active", True)
+                return item.is_active
         return False
 
     def activate_all(self, items: list) -> None:
@@ -417,5 +495,13 @@ class CustomizationRegistry:
             "subagents": (
                 sum(1 for sub in self.subagents if sub.is_active),
                 sum(sub.tokens for sub in self.subagents if sub.is_active),
+            ),
+            "plugins": (
+                sum(1 for p in self.plugins if p.is_active),
+                sum(p.skills_count for p in self.plugins if p.is_active),
+            ),
+            "mcp_servers": (
+                sum(1 for m in self.mcp_servers if m.is_active),
+                sum(m.tools_count for m in self.mcp_servers if m.is_active),
             ),
         }

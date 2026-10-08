@@ -52,6 +52,38 @@ class TestDiscovery(unittest.TestCase):
             self.assertEqual(len(ws_rules), 1)
             self.assertEqual(ws_rules[0].name, "GEMINI.md")
 
+    def test_discover_mcp_servers_and_toggle(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            # Create mock MCP server in ~/.gemini/antigravity/mcp/StitchMCP
+            mcp_dir = home / ".gemini" / "antigravity" / "mcp" / "StitchMCP"
+            mcp_dir.mkdir(parents=True)
+            (mcp_dir / "instructions.md").write_text("# Stitch MCP Instructions", encoding="utf-8")
+            (mcp_dir / "create_project.json").write_text("{}", encoding="utf-8")
+            (mcp_dir / "list_screens.json").write_text("{}", encoding="utf-8")
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            self.assertEqual(len(registry.mcp_servers), 1)
+            srv = registry.mcp_servers[0]
+            self.assertEqual(srv.name, "StitchMCP")
+            self.assertEqual(srv.tools_count, 2)
+            self.assertIn("create_project", srv.tools)
+            self.assertIn("list_screens", srv.tools)
+            self.assertTrue(srv.is_active)
+            self.assertIn("Stitch MCP Instructions", srv.instructions)
+
+            # Test toggle
+            registry.toggle_item(srv)
+            self.assertFalse(srv.is_active)
+            registry.toggle_item(srv)
+            self.assertTrue(srv.is_active)
+
 
 if __name__ == "__main__":
     unittest.main()

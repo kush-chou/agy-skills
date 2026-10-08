@@ -1,15 +1,17 @@
-"""Curses-based split-view TUI for Antigravity skills, rules, subagents, and plugins."""
+"""Curses-based split-view TUI for Antigravity skills, rules, subagents, plugins, MCP, and marketplace."""
 
 import curses
 import locale
 import os
+from pathlib import Path
 import re
 import sys
 import textwrap
 from typing import Any, Dict, List, Optional, Tuple, Union
 
+from ..catalog import CURATED_CATALOG, CatalogSkillPack, check_installed_status
 from ..discovery import CustomizationRegistry
-from ..models import Plugin, Rule, Scope, Skill, Subagent
+from ..models import MCPServer, Plugin, Rule, Scope, Skill, Subagent
 
 
 class SkillManagerTUI:
@@ -21,10 +23,13 @@ class SkillManagerTUI:
         self.rules: List[Rule] = []
         self.subagents: List[Subagent] = []
         self.plugins: List[Plugin] = []
+        self.mcp_servers: List[MCPServer] = []
+        self.marketplace_packs: List[CatalogSkillPack] = []
 
-        # Tabs: "skills", "rules", "subagents", "plugins", "status"
-        self.tabs = ["skills", "rules", "subagents", "plugins", "status"]
+        # Tabs: "skills", "rules", "subagents", "plugins", "mcp", "marketplace", "status"
+        self.tabs = ["skills", "rules", "subagents", "plugins", "mcp", "marketplace", "status"]
         self.active_tab_idx: int = 0
+        self.prev_tab_idx: int = 0
 
         self.selected_index: int = 0
         self.scroll_offset: int = 0
@@ -51,6 +56,9 @@ class SkillManagerTUI:
         self.skills, self.rules = self.registry.discover_all()
         self.subagents = self.registry.subagents
         self.plugins = self.registry.plugins
+        self.mcp_servers = self.registry.mcp_servers
+        check_installed_status(self.registry.workspace_root, self.registry.home_dir)
+        self.marketplace_packs = list(CURATED_CATALOG)
 
     def get_current_items_grouped(self) -> List[Tuple[str, List[Any]]]:
         """Return categorized sections of items for the currently selected tab."""
@@ -63,7 +71,17 @@ class SkillManagerTUI:
             name = getattr(item, "name", "").lower()
             desc = getattr(item, "description", "").lower()
             role = getattr(item, "role", "").lower()
-            return query in name or query in desc or query in role
+            author = getattr(item, "author", "").lower()
+            category = getattr(item, "category", "").lower()
+            tools = " ".join(getattr(item, "tools", [])).lower()
+            return (
+                query in name
+                or query in desc
+                or query in role
+                or query in author
+                or query in category
+                or query in tools
+            )
 
         if tab == "skills":
             ws_skills = [s for s in self.skills if s.scope == Scope.WORKSPACE and match_filter(s)]
@@ -107,7 +125,33 @@ class SkillManagerTUI:
 
         elif tab == "plugins":
             plugs = [p for p in self.plugins if match_filter(p)]
-            return [(f"INSTALLED ({len(plugs)})", plugs)]
+            return [(f"INSTALLED PLUGINS ({len(plugs)})", plugs)]
+
+        elif tab == "mcp":
+            system_mcps = [
+                m for m in self.mcp_servers
+                if not ("_" in m.name or m.name.startswith("data-agent-kit")) and match_filter(m)
+            ]
+            plugin_mcps = [
+                m for m in self.mcp_servers
+                if ("_" in m.name or m.name.startswith("data-agent-kit")) and match_filter(m)
+            ]
+            sections = []
+            if system_mcps:
+                sections.append((f"SYSTEM MCP SERVERS ({len(system_mcps)})", system_mcps))
+            if plugin_mcps:
+                sections.append((f"PLUGIN MCP SERVERS ({len(plugin_mcps)})", plugin_mcps))
+            return sections
+
+        elif tab == "marketplace":
+            top10 = [p for p in self.marketplace_packs if p.stars != "Official" and match_filter(p)]
+            official = [p for p in self.marketplace_packs if p.stars == "Official" and match_filter(p)]
+            sections = []
+            if top10:
+                sections.append((f"TOP 10 SKILLLEADERBOARD PACKS ({len(top10)})", top10))
+            if official:
+                sections.append((f"VOLTAGENT OFFICIAL PACKS ({len(official)})", official))
+            return sections
 
         return []
 
@@ -194,17 +238,29 @@ class SkillManagerTUI:
 
             if key in (ord('q'), 27):  # q or ESC
                 break
-            elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5')):
+            elif key in (ord('1'), ord('2'), ord('3'), ord('4'), ord('5'), ord('6'), ord('7')):
+                self.prev_tab_idx = self.active_tab_idx
                 self.active_tab_idx = int(chr(key)) - 1
                 self.selected_index = 0
                 self.scroll_offset = 0
                 self.detail_scroll = 0
+            elif key == ord('m'):  # [m] Key: Toggle Marketplace View
+                if self.active_tab == "marketplace":
+                    self.active_tab_idx = self.prev_tab_idx if self.prev_tab_idx != 5 else 0
+                else:
+                    self.prev_tab_idx = self.active_tab_idx
+                    self.active_tab_idx = 5
+                self.selected_index = 0
+                self.scroll_offset = 0
+                self.detail_scroll = 0
             elif key in (curses.KEY_LEFT, ord('[')):
+                self.prev_tab_idx = self.active_tab_idx
                 self.active_tab_idx = (self.active_tab_idx - 1) % len(self.tabs)
                 self.selected_index = 0
                 self.scroll_offset = 0
                 self.detail_scroll = 0
             elif key in (curses.KEY_RIGHT, ord(']')):
+                self.prev_tab_idx = self.active_tab_idx
                 self.active_tab_idx = (self.active_tab_idx + 1) % len(self.tabs)
                 self.selected_index = 0
                 self.scroll_offset = 0
@@ -223,7 +279,7 @@ class SkillManagerTUI:
                 self.detail_scroll = max(0, self.detail_scroll - 6)
             elif key in (curses.KEY_NPAGE, ord('d')) and key != ord('d'):  # Page Down
                 self.detail_scroll += 6
-            elif key == ord(' '):  # Space -> Toggle Item
+            elif key in (ord(' '), ord('i')):  # Space or 'i' -> Toggle / Install
                 self._handle_toggle()
             elif key == ord('a'):  # Activate All
                 items = self.get_flattened_selectable_items()
@@ -282,7 +338,9 @@ class SkillManagerTUI:
             ("2: Rules", 1),
             ("3: Subagents", 2),
             ("4: Plugins", 3),
-            ("5: Status", 4),
+            ("5: MCP", 4),
+            ("6: Market", 5),
+            ("7: Status", 6),
         ]
 
         x = 1
@@ -377,8 +435,13 @@ class SkillManagerTUI:
                     bullet = "○"
 
                 name = item.name
-                tokens = getattr(item, "tokens", 0)
-                tok_str = f"~{tokens}t"
+                if isinstance(item, MCPServer):
+                    tok_str = f"{item.tools_count}t"
+                elif hasattr(item, "stars"):
+                    tok_str = f"★{item.stars}"
+                else:
+                    tokens = getattr(item, "tokens", 0)
+                    tok_str = f"~{tokens}t"
 
                 # Row text layout
                 prefix = f" {bullet} {name}"
@@ -427,26 +490,52 @@ class SkillManagerTUI:
 
         # 1. Prepare Box Metadata Lines
         item_name = item.name
-        entity_type = "SKILL" if isinstance(item, Skill) else "RULE" if isinstance(item, Rule) else "SUBAGENT" if isinstance(item, Subagent) else "PLUGIN"
+        if isinstance(item, Skill):
+            entity_type = "SKILL"
+        elif isinstance(item, Rule):
+            entity_type = "RULE"
+        elif isinstance(item, Subagent):
+            entity_type = "SUBAGENT"
+        elif isinstance(item, Plugin):
+            entity_type = "PLUGIN"
+        elif isinstance(item, MCPServer):
+            entity_type = "MCP SERVER"
+        else:
+            entity_type = "MARKETPLACE PACK"
+
         tier = getattr(item, "tier", "WORKSPACE")
         tokens = getattr(item, "tokens", 0)
 
         meta_lines = []
-        meta_lines.append(f"Type: {entity_type} · Tier: {tier} · ~{tokens} tok")
-
-        author = getattr(item, "author", "")
-        if author:
-            meta_lines.append(f"Author: {author}")
-
-        trigger = getattr(item, "slash_trigger", "")
-        if trigger:
-            meta_lines.append(f"Slash Trigger: {trigger}")
-        elif isinstance(item, Subagent):
-            meta_lines.append(f"Role: {item.role}")
-            meta_lines.append(f"Model: {item.model}")
-        elif isinstance(item, Rule):
-            size_kb = f"{item.size_bytes / 1024:.2f} KB"
-            meta_lines.append(f"Size: {item.size_bytes:,} bytes ({size_kb}) · Limit: 24 KB")
+        if isinstance(item, MCPServer):
+            meta_lines.append(f"Type: MCP SERVER · Active: {'● Enabled' if item.is_active else '○ Disabled'} · {item.tools_count} Tools")
+            if item.path:
+                meta_lines.append(f"Path: {item.path}")
+            if item.tools:
+                sample_tools = ", ".join(item.tools[:5])
+                if len(item.tools) > 5:
+                    sample_tools += f" ... (+{len(item.tools) - 5} more)"
+                meta_lines.append(f"Tools: {sample_tools}")
+        elif hasattr(item, "repo") and hasattr(item, "stars"):
+            inst_badge = "✔ Installed" if item.is_installed else "○ Available (Press Space to Install)"
+            meta_lines.append(f"Type: MARKETPLACE · Category: {item.category} · ★ {item.stars}")
+            meta_lines.append(f"Repo: {item.repo} · Status: {inst_badge}")
+            meta_lines.append(f"Slash Trigger: {item.slash_trigger} · ~{item.tokens} tok")
+            meta_lines.append(f"Author: {item.author}")
+        else:
+            meta_lines.append(f"Type: {entity_type} · Tier: {tier} · ~{tokens} tok")
+            author = getattr(item, "author", "")
+            if author:
+                meta_lines.append(f"Author: {author}")
+            trigger = getattr(item, "slash_trigger", "")
+            if trigger:
+                meta_lines.append(f"Slash Trigger: {trigger}")
+            elif isinstance(item, Subagent):
+                meta_lines.append(f"Role: {item.role}")
+                meta_lines.append(f"Model: {item.model}")
+            elif isinstance(item, Rule):
+                size_kb = f"{item.size_bytes / 1024:.2f} KB"
+                meta_lines.append(f"Size: {item.size_bytes:,} bytes ({size_kb}) · Limit: 24 KB")
 
         desc = getattr(item, "description", "")
         wrapped_desc = textwrap.wrap(desc, width=card_w - 4) if desc else []
@@ -495,7 +584,33 @@ class SkillManagerTUI:
         if preview_height <= 0:
             return
 
-        body_raw = getattr(item, "body", "") or getattr(item, "raw_content", "") or getattr(item, "system_prompt", "")
+        if isinstance(item, MCPServer):
+            body_parts = []
+            if item.instructions:
+                body_parts.append(f"## Server Instructions\n{item.instructions}\n")
+            body_parts.append(f"## Registered MCP Tools ({item.tools_count})")
+            for t in item.tools:
+                body_parts.append(f"- **{t}**")
+            body_raw = "\n".join(body_parts)
+        elif hasattr(item, "repo") and hasattr(item, "stars"):
+            body_parts = [
+                f"# {item.name.replace('-', ' ').title()}",
+                f"\n**Upstream Source**: {item.source_url}",
+                f"**Stars**: ★ {item.stars} · **Category**: {item.category}\n",
+                f"## Overview\n{item.description}\n",
+                f"## Turnkey Installation",
+                f"- Press `[Space]` or `[i]` to install pack to `[{self.target_scope.value.upper()}]`.",
+                f"- Press `[Tab]` to switch target scope (Workspace vs Global).",
+                f"- Slash Trigger: `{item.slash_trigger}`",
+            ]
+            body_raw = "\n".join(body_parts)
+        else:
+            body_raw = (
+                getattr(item, "body", "")
+                or getattr(item, "raw_content", "")
+                or getattr(item, "system_prompt", "")
+            )
+
         lines = body_raw.splitlines()
 
         # Render preview lines with scroll offset
@@ -507,7 +622,6 @@ class SkillManagerTUI:
             line_text = lines[line_idx]
             rendered_y = curr_y + p_idx
 
-            # Apply markdown syntax highlighting
             trimmed = line_text[:card_w]
             attr = 0
 
@@ -560,10 +674,12 @@ class SkillManagerTUI:
             ("Catalog Active Skills", breakdown["catalog_skills"]),
             ("Antigravity Rules", breakdown["rules"]),
             ("Active Subagents", breakdown["subagents"]),
+            ("Active Plugins", breakdown.get("plugins", (0, 0))),
+            ("Active MCP Servers", breakdown.get("mcp_servers", (0, 0))),
         ]
 
         for label, (count, tok) in labels:
-            row = f"  • {label:<24}: {count:>3} active ({tok:>5,} tok)"
+            row = f"  • {label:<24}: {count:>3} active ({tok:>5,} tok/items)"
             self._safe_addstr(stdscr, y, 4, row)
             y += 1
 
@@ -597,18 +713,19 @@ class SkillManagerTUI:
     def _draw_footer(self, stdscr, max_y: int, max_x: int) -> None:
         """Draw bottom shortcut bar."""
         footer_shortcuts = (
-            "[1-5] Tabs  [↑/↓] Nav  [Space] Toggle  [a/d] All/None  [e] Edit  [Tab] Scope  [/] Filter  [q] Quit"
+            "[1-7] Tabs  [m] Market  [↑/↓] Nav  [Space/i] Toggle/Install  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
         )
         line = footer_shortcuts.ljust(max_x - 1)[:max_x - 1]
         attr = self._color(7, curses.A_BOLD) if self.has_colors else curses.A_REVERSE
         self._safe_addstr(stdscr, max_y - 1, 0, line, attr)
 
     def _handle_toggle(self) -> None:
-        """Toggle active state of currently selected item."""
+        """Toggle active state of currently selected item or install from marketplace."""
         items = self.get_flattened_selectable_items()
         if items and 0 <= self.selected_index < len(items):
             item = items[self.selected_index]
             self.registry.toggle_item(item, target_scope=self.target_scope)
+            self.refresh_data()
 
     def _handle_edit(self, stdscr) -> None:
         """Open source file of selected item in $EDITOR."""
@@ -618,6 +735,12 @@ class SkillManagerTUI:
 
         item = items[self.selected_index]
         target_file = getattr(item, "skill_file", None) or getattr(item, "path", None)
+        if isinstance(item, MCPServer) and item.path:
+            inst = item.path / "instructions.md"
+            target_file = inst if inst.exists() else item.path
+        elif hasattr(item, "install_path") and item.install_path:
+            target_file = item.install_path / "SKILL.md"
+
         if not target_file or not os.path.exists(target_file):
             return
 

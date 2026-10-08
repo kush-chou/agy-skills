@@ -216,3 +216,15 @@ class Plugin:
     is_active: bool = True
     skills: List[str] = field(default_factory=list)
     mcp_servers: List[str] = field(default_factory=list)
+
+
+@dataclass
+class MCPServer:
+    name: str
+    tools_count: int = 0
+    tools: List[str] = field(default_factory=list)
+    is_active: bool = True
+    path: Optional[Path] = None
+    description: str = ""
+    instructions: str = ""
+

@@ -94,8 +94,20 @@ class TestSkillManagerTUI(unittest.TestCase):
         subs = self.tui.get_flattened_selectable_items()
         self.assertTrue(any(s.name == "self" for s in subs))
 
-        # Switch to status
+        # Switch to plugins
+        self.tui.active_tab_idx = 3
+        self.assertEqual(self.tui.active_tab, "plugins")
+
+        # Switch to mcp
         self.tui.active_tab_idx = 4
+        self.assertEqual(self.tui.active_tab, "mcp")
+
+        # Switch to marketplace
+        self.tui.active_tab_idx = 5
+        self.assertEqual(self.tui.active_tab, "marketplace")
+
+        # Switch to status
+        self.tui.active_tab_idx = 6
         self.assertEqual(self.tui.active_tab, "status")
 
     def test_render_mock(self):

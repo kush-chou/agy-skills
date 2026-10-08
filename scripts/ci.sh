@@ -15,7 +15,7 @@ $PYTHON --version
 
 echo ""
 echo "==> Running static syntax checks..."
-$PYTHON -m py_compile agy_skills/*.py tests/*.py
+$PYTHON -m py_compile agy_skills/*.py agy_skills/tui/*.py tests/*.py
 echo "✔ Syntax verification passed"
 
 echo ""
