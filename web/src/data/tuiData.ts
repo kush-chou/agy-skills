@@ -151,6 +151,39 @@ export const INITIAL_TUI_ITEMS: TuiItem[] = [
 
   // Plugins
   {
+    id: 'p-gemini-api',
+    name: 'gemini-api',
+    badge: 'INSTALLED',
+    tokens: 1314,
+    active: true,
+    type: 'plugin',
+    description: 'Official Google Gemini SDK, live audio/video streaming, multimodal tools, and API documentation.',
+    path: '~/.gemini/config/plugins/gemini-api (3 skills, 2 tools)',
+    statusText: '● active (LSP linked)',
+  },
+  {
+    id: 'p-flutter',
+    name: 'flutter',
+    badge: 'INSTALLED',
+    tokens: 2485,
+    active: true,
+    type: 'plugin',
+    description: 'Dart and Flutter app scaffolding, state management, widget testing, and accessibility auditing.',
+    path: '~/.gemini/config/plugins/flutter (23 skills, 1 agent)',
+    statusText: '● active (LSP linked)',
+  },
+  {
+    id: 'p-firebase',
+    name: 'firebase',
+    badge: 'INSTALLED',
+    tokens: 2113,
+    active: false,
+    type: 'plugin',
+    description: 'Firebase backend tools, Firestore rules compiler, Auth management, and Cloud Functions.',
+    path: '~/.gemini/config/plugins/firebase (13 skills, 1 agent)',
+    statusText: '○ disabled',
+  },
+  {
     id: 'p-rust-medtech',
     name: 'rust-medtech-dev',
     badge: 'INSTALLED',
@@ -171,17 +204,6 @@ export const INITIAL_TUI_ITEMS: TuiItem[] = [
     description: 'Bioinformatics and life sciences toolkit (UniProt, PDB, AlphaFold, ChEMBL, BLAST).',
     path: '~/.gemini/config/plugins/science (40 skills)',
     statusText: '● active (LSP linked)',
-  },
-  {
-    id: 'p-firebase',
-    name: 'firebase',
-    badge: 'INSTALLED',
-    tokens: 0,
-    active: false,
-    type: 'plugin',
-    description: 'Firebase backend tools, Firestore rules compiler, Auth management, and Cloud Functions.',
-    path: '~/.gemini/config/plugins/firebase (13 skills)',
-    statusText: '○ disabled',
   },
 
   // MCP Servers

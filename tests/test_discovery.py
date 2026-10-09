@@ -84,6 +84,48 @@ class TestDiscovery(unittest.TestCase):
             registry.toggle_item(srv)
             self.assertTrue(srv.is_active)
 
+    def test_calibrated_plugin_metrics_and_component_toggle(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            # Create mock plugin gemini-api
+            plugin_dir = home / ".gemini" / "config" / "plugins" / "gemini-api"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "plugin.json").write_text(
+                '{"name": "gemini-api", "version": "2.2.0", "description": "Google Gemini SDK"}',
+                encoding="utf-8",
+            )
+            skills_dir = plugin_dir / "skills" / "gemini-api-dev"
+            skills_dir.mkdir(parents=True)
+            (skills_dir / "SKILL.md").write_text(
+                "---\nname: gemini-api-dev\ndescription: Gemini Dev\n---\nBody",
+                encoding="utf-8",
+            )
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            plug = next((p for p in registry.plugins if p.name == "gemini-api"), None)
+            self.assertIsNotNone(plug)
+            # Must match official IDE calibration
+            self.assertEqual(plug.tokens, 1314)
+            self.assertEqual(plug.skills_tokens, 566)
+            self.assertEqual(plug.mcp_tokens, 748)
+            self.assertEqual(plug.version, "2.2.0")
+            self.assertEqual(plug.excluded_tools_count, 1)
+
+            # Test toggling individual subcomponent
+            # Initially active tokens is 1314
+            self.assertEqual(plug.active_tokens, 1314)
+            # Toggle gemini_search_docs
+            res = registry.toggle_plugin_component("gemini-api", "gemini_search_docs")
+            self.assertFalse(res)
+            # Should subtract 374 tokens
+            self.assertEqual(plug.active_tokens, 1314 - 374)
+
 
 if __name__ == "__main__":
     unittest.main()

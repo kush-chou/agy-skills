@@ -6,7 +6,7 @@ import sys
 from typing import Optional
 
 from .discovery import CustomizationRegistry
-from .models import Scope
+from .models import Plugin, Scope
 
 
 def print_list(registry: CustomizationRegistry) -> None:
@@ -50,7 +50,7 @@ def print_list(registry: CustomizationRegistry) -> None:
         print(f"\n=== Antigravity Plugins ({len(registry.plugins)} found) ===")
         for p in registry.plugins:
             status = "● active" if p.is_active else "○ disabled"
-            print(f"  • {p.name:<28} [INSTALLED]  {status:<12} ({p.skills_count} skills)")
+            print(f"  • {p.name:<28} [INSTALLED]  {status:<12} ~{p.tokens:,} tok  ({p.skills_count} skills)")
 
     if registry.mcp_servers:
         print(f"\n=== Antigravity MCP Servers ({len(registry.mcp_servers)} found) ===")
@@ -144,11 +144,7 @@ def print_info(registry: CustomizationRegistry, target_name: str) -> None:
 
     found_plug = next((p for p in registry.plugins if p.name == target_name), None)
     if found_plug:
-        print(f"\n--- Plugin: {found_plug.name} ---")
-        print(f"Tier:   {found_plug.tier}")
-        print(f"Path:   {found_plug.path}")
-        print(f"Skills: {found_plug.skills_count}")
-        print(f"Desc:   {found_plug.description}")
+        print_plugin_info(found_plug)
         return
 
     found_mcp = next((m for m in registry.mcp_servers if m.name == target_name), None)
@@ -177,6 +173,187 @@ def print_info(registry: CustomizationRegistry, target_name: str) -> None:
 
     print(f"Error: No customization found matching '{target_name}'.", file=sys.stderr)
     sys.exit(1)
+
+
+def print_plugin_info(p: Plugin, show_breakdowns: bool = True) -> None:
+    """Print complete Antigravity IDE Customizations view for a plugin."""
+    budget = 20_000
+    pct = (p.tokens / budget) * 100.0
+
+    print(f"\n\033[1;36mCustomizations\033[0m / \033[1;37m{p.name}\033[0m  \033[2m(Version {p.version})\033[0m")
+    print("=" * 68)
+    if p.description:
+        print(f"{p.description}\n")
+
+    if p.suggested_prompts:
+        print("\033[1;33mSuggested Prompts / Examples:\033[0m")
+        for sp in p.suggested_prompts:
+            print(f"  • \"{sp}\"")
+        print("")
+
+    if p.resources:
+        print("\033[1;33mResources:\033[0m")
+        for res in p.resources:
+            url_str = f" \033[2m({res['url']})\033[0m" if res.get("url") else ""
+            print(f"  • \033[1;34m{res.get('title', '')}\033[0m [↗]{url_str}")
+        print("")
+
+    if p.commands:
+        print(f"\033[1;32mCommands ({len(p.commands)}) ▼\033[0m")
+        for trig, desc, tok in p.commands:
+            print(f"  • \033[1;36m{trig:<32}\033[0m \033[33m(~{tok} tok)\033[0m")
+            if desc:
+                print(f"    {desc}")
+        print("")
+
+    if p.agents:
+        print(f"\033[1;35mAgents ({len(p.agents)}) ▼\033[0m")
+        for ag_name, ag_desc, ag_tok in p.agents:
+            print(f"  • \033[1;35m{ag_name:<32}\033[0m \033[33m(~{ag_tok} tok)\033[0m")
+            if ag_desc:
+                print(f"    {ag_desc}")
+        print("")
+
+    if p.mcp_servers or p.mcp_tools:
+        cnt = len(p.mcp_servers) or len(p.mcp_tools)
+        print(f"\033[1;34mMCP servers ({cnt}) ▼\033[0m")
+        for srv in p.mcp_servers:
+            print(f"  • {srv}")
+        print("")
+
+    if p.rules:
+        print(f"\033[1;33mRules ({len(p.rules)}) ▼\033[0m")
+        for r_name, r_desc, r_tok in p.rules:
+            tok_badge = f"\033[33m(~{r_tok} tok)\033[0m" if r_tok else ""
+            print(f"  • \033[1;33m{r_name:<32}\033[0m {tok_badge}")
+            if r_desc:
+                print(f"    {r_desc}")
+        print("")
+
+    # Context usage
+    print(f"\033[1;37mContext usage ({p.tokens:,} tokens)\033[0m")
+    print(f"Customizations    {p.tokens:,} / {budget:,} tokens ({pct:.1f}%)")
+
+    # Colored segmented ANSI bar
+    bar_len = 32
+    s_blocks = int(round((p.skills_tokens / budget) * bar_len))
+    m_blocks = int(round((p.mcp_tokens / budget) * bar_len))
+    a_blocks = int(round((p.agents_tokens / budget) * bar_len))
+    r_blocks = int(round((p.rules_tokens / budget) * bar_len))
+    rem_blocks = max(0, bar_len - (s_blocks + m_blocks + a_blocks + r_blocks))
+
+    seg_bar = (
+        f"\033[34m{'█' * s_blocks}\033[0m"
+        f"\033[32m{'█' * m_blocks}\033[0m"
+        f"\033[36m{'█' * a_blocks}\033[0m"
+        f"\033[33m{'█' * r_blocks}\033[0m"
+        f"\033[2m{'░' * rem_blocks}\033[0m"
+    )
+    print(f"[{seg_bar}]")
+
+    # Category summaries matching IDE GUI
+    if p.skills_tokens or p.commands:
+        s_pct = (p.skills_tokens / budget) * 100.0
+        print(f"  • \033[34mSkills\033[0m ({p.skills_tokens:,} tokens) {s_pct:.1f}%      \033[2mShow {len(p.commands)} breakdowns\033[0m")
+    if p.mcp_tokens or p.mcp_tools:
+        m_pct = (p.mcp_tokens / budget) * 100.0
+        warn_str = f"  \033[33m⚠️ {p.excluded_tools_count} excluded\033[0m" if p.excluded_tools_count else ""
+        print(f"  • \033[32mMcp Tools\033[0m ({p.mcp_tokens:,} tokens) {m_pct:.1f}%{warn_str}      \033[2mShow {len(p.mcp_tools)} breakdowns\033[0m")
+    if p.agents_tokens or p.agents:
+        a_pct = (p.agents_tokens / budget) * 100.0
+        print(f"  • \033[36mSubagents\033[0m ({p.agents_tokens:,} tokens) {a_pct:.1f}%      \033[2mShow {len(p.agents)} breakdowns\033[0m")
+    if p.rules_tokens or p.rules:
+        r_pct = (p.rules_tokens / budget) * 100.0
+        print(f"  • \033[33mRules\033[0m ({p.rules_tokens:,} tokens) {r_pct:.1f}%      \033[2mShow {len(p.rules)} breakdowns\033[0m")
+
+    # Deep itemized breakdown
+    if show_breakdowns and p.breakdowns:
+        print(f"\n\033[1;37mItemized Breakdown ({len(p.breakdowns)} components):\033[0m")
+        print(f"  {'TYPE':<12} {'NAME':<32} {'TOKENS':<16} {'STATUS':<12} {'DESCRIPTION'}")
+        print("  " + "-" * 82)
+        for b in p.breakdowns:
+            st = "\033[32m● active\033[0m" if b.is_active else "\033[2m○ disabled\033[0m"
+            excl = " \033[33m(excl)\033[0m" if b.is_excluded else ""
+            tok_str = f"{b.tokens:,}t ({b.tokens/budget*100:.1f}%){excl}"
+            print(f"  {b.category:<12} {b.name:<32} {tok_str:<24} {st:<20} {b.description[:36]}")
+
+    status_str = "\033[32m● ENABLED\033[0m" if p.is_active else "\033[2m○ DISABLED\033[0m"
+    print(f"\nStatus: {status_str} · Scope: [{p.scope.value.upper()}] · Author: {p.author}")
+    print(f"Path:   {p.path}\n")
+
+
+def print_tokens(registry: CustomizationRegistry) -> None:
+    """Print complete Antigravity context budget audit and breakdown."""
+    registry.discover_all()
+    budget = registry.token_budget
+    active_tok = registry.get_total_active_tokens()
+    pct = (active_tok / budget) * 100.0
+
+    print(f"\n=======================================================")
+    print(f"    Antigravity Context Window & Token Budget Audit    ")
+    print(f"=======================================================")
+    print(f"Target Budget:      {budget:,} tokens (Hard Cap)")
+    print(f"Active Consumption: {active_tok:,} tokens ({pct:.1f}% used)")
+    print(f"Remaining Headroom: {max(0, budget - active_tok):,} tokens ({max(0.0, 100.0 - pct):.1f}% free)\n")
+
+    # Segmented Bar
+    bar_len = 40
+    bd = registry.get_token_breakdown()
+    ws_tok = bd["workspace_skills"][1]
+    bi_tok = bd["builtin_skills"][1]
+    gl_tok = bd["global_skills"][1]
+    r_tok = bd["rules"][1]
+    sub_tok = bd["subagents"][1]
+    p_tok = bd["plugins"][1]
+
+    fill_len = int(round((pct / 100.0) * bar_len))
+    empty_len = max(0, bar_len - fill_len)
+    bar_str = ("█" * fill_len) + ("░" * empty_len)
+    print(f"Context Gauge: [{bar_str}] {active_tok:,} / {budget:,} tokens\n")
+
+    print("Category Breakdown:")
+    print(f"  • Workspace Skills : {bd['workspace_skills'][0]:>2} active ({ws_tok:>5,} tok)")
+    print(f"  • Built-in Skills  : {bd['builtin_skills'][0]:>2} active ({bi_tok:>5,} tok)")
+    print(f"  • Global Skills    : {bd['global_skills'][0]:>2} active ({gl_tok:>5,} tok)")
+    print(f"  • Active Rules     : {bd['rules'][0]:>2} active ({r_tok:>5,} tok)")
+    print(f"  • Active Subagents : {bd['subagents'][0]:>2} active ({sub_tok:>5,} tok)")
+    print(f"  • Active Plugins   : {bd['plugins'][0]:>2} active ({p_tok:>5,} tok)\n")
+
+    # Heaviest components
+    all_components = []
+    for s in registry.skills:
+        if s.is_active and s.scope in (Scope.WORKSPACE, Scope.GLOBAL, Scope.BUILTIN):
+            all_components.append((f"[SKILL] {s.name}", s.tokens))
+    for r in registry.rules:
+        if r.is_active:
+            all_components.append((f"[RULE] {r.name}", r.tokens))
+    for p in registry.plugins:
+        if p.is_active:
+            all_components.append((f"[PLUGIN] {p.name}", p.tokens))
+
+    all_components.sort(key=lambda x: x[1], reverse=True)
+
+    print("Top Context Consumers:")
+    for name, tok in all_components[:8]:
+        item_pct = (tok / budget) * 100.0
+        print(f"  {tok:>5,} tok ({item_pct:>4.1f}%)  {name}")
+
+    print("")
+
+
+def toggle_plugin_component_cli(registry: CustomizationRegistry, plugin_name: str, component_name: str) -> int:
+    """CLI toggle for a specific subcomponent within a plugin."""
+    registry.discover_all()
+    result = registry.toggle_plugin_component(plugin_name, component_name)
+    if result is None:
+        print(f"Error: Component '{component_name}' not found in plugin '{plugin_name}'.", file=sys.stderr)
+        return 1
+    state = "ENABLED" if result else "DISABLED"
+    plug = next((p for p in registry.plugins if p.name == plugin_name), None)
+    new_tokens = plug.tokens if plug else 0
+    print(f"✔ Subcomponent '{component_name}' in plugin '{plugin_name}' is now {state}.")
+    print(f"   Plugin '{plugin_name}' now consumes {new_tokens:,} tokens.\n")
+    return 0
 
 
 def manage_plugin_cli(registry: CustomizationRegistry, plugin_name: str, action: str = "toggle") -> int:

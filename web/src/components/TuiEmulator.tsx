@@ -4,7 +4,7 @@ import React, { useState, useMemo } from 'react';
 import { INITIAL_TUI_ITEMS, TuiItem } from '../data/tuiData';
 import { Search, Terminal, Sliders, CheckSquare, Square, Info, ShieldCheck, Zap } from 'lucide-react';
 
-const TOKEN_BUDGET = 32000;
+const TOKEN_BUDGET = 20000;
 
 export function TuiEmulator() {
   const [items, setItems] = useState<TuiItem[]>(INITIAL_TUI_ITEMS);

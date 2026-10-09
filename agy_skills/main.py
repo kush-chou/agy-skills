@@ -10,7 +10,9 @@ from .cli import (
     print_lint,
     print_list,
     print_search,
+    print_tokens,
     run_install,
+    toggle_plugin_component_cli,
 )
 from .discovery import CustomizationRegistry
 from .models import Scope
@@ -44,18 +46,34 @@ def main() -> None:
         metavar="NAME",
         help="Print detailed information for a specific skill, rule, subagent, plugin, or MCP server.",
     )
+    parser.add_argument(
+        "--tokens",
+        action="store_true",
+        help="Audit active context window usage against the 20,000 token limit.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # list subcommand
     subparsers.add_parser("list", help="List all customizations non-interactively.")
 
+    # tokens subcommand
+    subparsers.add_parser("tokens", help="Audit active context window token consumption.")
+
     # lint subcommand
     subparsers.add_parser("lint", help="Lint all customizations for Antigravity standard compliance.")
 
-    # info subcommand
-    sub_info = subparsers.add_parser("info", help="Inspect a specific customization or MCP server.")
+    # info / inspect subcommand
+    sub_info = subparsers.add_parser("info", help="Inspect a specific customization or plugin in detail.")
     sub_info.add_argument("name", help="Name of skill, rule, plugin, or MCP server.")
+
+    sub_inspect = subparsers.add_parser("inspect", help="Alias for 'info' - inspect customization details.")
+    sub_inspect.add_argument("name", help="Name of skill, rule, plugin, or MCP server.")
+
+    # toggle subcommand (granular power feature)
+    sub_toggle = subparsers.add_parser("toggle", help="Toggle a plugin or cherry-pick individual subcomponents.")
+    sub_toggle.add_argument("name", help="Plugin name or customization name.")
+    sub_toggle.add_argument("--sub", "--component", dest="component", default=None, help="Specific subcomponent to toggle.")
 
     # search subcommand
     sub_search = subparsers.add_parser("search", help="Search the curated agent skill marketplace.")
@@ -98,6 +116,13 @@ def main() -> None:
         sys.exit(run_install(args.pack, scope, registry.workspace_root, registry.home_dir))
     elif args.command == "plugin":
         sys.exit(manage_plugin_cli(registry, args.name, args.action))
+    elif args.command == "toggle":
+        if args.component:
+            sys.exit(toggle_plugin_component_cli(registry, args.name, args.component))
+        else:
+            sys.exit(manage_plugin_cli(registry, args.name, "toggle"))
+    elif args.command == "tokens" or args.tokens:
+        print_tokens(registry)
     elif args.command == "mcp":
         if args.server_name:
             print_info(registry, args.server_name)
@@ -110,8 +135,8 @@ def main() -> None:
             print("")
     elif args.command == "lint" or args.lint:
         sys.exit(print_lint(registry))
-    elif args.command == "info" or args.info:
-        target = args.name if args.command == "info" else args.info
+    elif args.command in ("info", "inspect") or args.info:
+        target = args.name if args.command in ("info", "inspect") else args.info
         print_info(registry, target)
     elif args.command == "list" or args.list:
         print_list(registry)

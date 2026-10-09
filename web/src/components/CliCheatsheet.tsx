@@ -15,22 +15,81 @@ const CLI_COMMANDS: CliCmd[] = [
     name: 'tui',
     command: 'agy-skills',
     description: 'Launch the full curses split-view context manager in your terminal.',
-    output: `[Tabs: 1-Skills 2-Rules 3-Subagents 4-Plugins 5-MCP]
-Active Context: 3,420 / 32,000 tokens (10.7%)
+    output: `[Tabs: 1-Skills 2-Rules 3-Subagents 4-Plugins 5-MCP 6-Built-in 7-Tokens]
+Active Context: 3,420 / 20,000 tokens (17.1%) [||||...............]
 
 [X] superpowers          [WORKSPACE]   ~110t   ✔ valid
 [X] ui-ux-pro-max         [WORKSPACE]   ~140t   ✔ valid
 [X] gpui-framework        [PLUGIN]      ~160t   ✔ valid
-[ ] dicom-rs-monai        [PLUGIN]      ~95t    ✔ valid`,
+[ ] dicom-rs-monai        [PLUGIN]      ~95t    ✔ valid
+
+[1-7] Tabs  [b/Enter] Breakdowns  [Space] Toggle  [Tab] Scope  [q] Quit`,
+  },
+  {
+    name: 'inspect',
+    command: 'agy-skills inspect gemini-api',
+    description: 'Inspect exact Antigravity IDE GUI hierarchy, category tokens, and component breakdown.',
+    output: `======================================================================
+  Customizations / gemini-api (v2.2.0)
+======================================================================
+  Status:  ● Active
+  Scope:   PLUGIN
+  Context: 1,314 / 20,000 tokens (6.6%)
+
+--- Category Breakdown ---
+  • Skills     (566 tokens) 2.8% [3 item(s)]
+  • Mcp Tools  (748 tokens) 3.7% [2 item(s)] ⚠️ 1 excluded
+
+--- Component Breakdown ---
+  ● [SKILL]    gemini-api-dev                   ~240 tok  Gemini API text, multi-turn...
+  ● [SKILL]    gemini-live-api-dev              ~180 tok  Bidirectional streaming...
+  ● [SKILL]    gemini-omni-flash-api            ~146 tok  Generative video editing...
+  ● [MCP]      gemini_search_docs               ~374 tok  Search Google Gemini API docs
+  ● [MCP]      gemini_get_doc                   ~374 tok  Retrieve documentation page
+  ○ [MCP]      gemini_batch_generate            ~350 tok  (EXCLUDED - lazy-loaded)`,
+  },
+  {
+    name: 'tokens',
+    command: 'agy-skills tokens',
+    description: 'Audit context window usage against the 20,000 token limit with breakdown metrics.',
+    output: `======================================================================
+  Antigravity IDE 2.0 Context Token Budget Audit
+======================================================================
+Active Context:  4,734 / 20,000 tokens (23.7%)
+[██████████░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░░] 23.7%
+Headroom Remaining: 15,266 tokens (76.3%)
+
+--- Token Usage by Category ---
+  Category     Active Tokens     Budget %       Components
+  -------------------------------------------------------------
+  Skills               1,820         9.1%       14 active
+  Rules                  982         4.9%        2 active
+  Subagents              165         0.8%        2 active
+  Mcp Tools            1,767         8.8%        4 active
+  Total Context:       4,734        23.7%
+
+--- Top Context Consumers ---
+  1. gemini-api (plugin)                    1,314 tokens (6.6%)
+  2. AGENTS.md (rule)                         680 tokens (3.4%)
+  3. StitchMCP (mcp)                          420 tokens (2.1%)
+  4. GEMINI.md (rule)                         302 tokens (1.5%)`,
+  },
+  {
+    name: 'toggle',
+    command: 'agy-skills toggle gemini-api --sub gemini_search_docs',
+    description: 'Granularly cherry-pick and toggle subcomponents inside plugins without disabling the plugin.',
+    output: `Component 'gemini_search_docs' inside plugin 'gemini-api' is now DISABLED.
+Active context recalculated: 4,360 / 20,000 tokens (21.8%)
+Saved overrides to ~/.gemini/config/agy_skills_overrides.json`,
   },
   {
     name: 'list',
     command: 'agy-skills list',
     description: 'Print formatted overview of all discovered skills, rules, and token estimates.',
     output: `📂 Workspace Root: /Users/developer/codebase
-📊 Active Context:  3,420 / 32,000 tokens (10.7%)
+📊 Active Context:  4,734 / 20,000 tokens (23.7%)
 
-=== Antigravity Skills (11 found) ===
+=== Antigravity Skills (14 found) ===
   • superpowers                 [WORKSPACE]   ~110t   ✔ valid
   • ui-ux-pro-max                [WORKSPACE]   ~140t   ✔ valid
   • gpui-framework               [PLUGIN]      ~160t   ✔ valid
@@ -46,7 +105,7 @@ Active Context: 3,420 / 32,000 tokens (10.7%)
     description: 'Validate kebab-case naming, directory symmetry, and 24 KB rule size budget.',
     output: `🔍 Running Antigravity Validation Suite...
 
-✔ All 11 skills conform to Antigravity frontmatter schema.
+✔ All 14 skills conform to Antigravity frontmatter schema.
 ✔ All directory names match skill package identifiers.
 ✔ All rules are within the 24 KB Antigravity size budget.
 

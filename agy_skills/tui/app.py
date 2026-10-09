@@ -279,6 +279,12 @@ class SkillManagerTUI:
                 self.detail_scroll = max(0, self.detail_scroll - 6)
             elif key in (curses.KEY_NPAGE, ord('d')) and key != ord('d'):  # Page Down
                 self.detail_scroll += 6
+            elif key in (ord('b'), ord('\n'), 10, curses.KEY_ENTER):  # 'b' or Enter -> Breakdown Inspector
+                items = self.get_flattened_selectable_items()
+                if 0 <= self.selected_index < len(items):
+                    selected = items[self.selected_index]
+                    if isinstance(selected, Plugin) and selected.breakdowns:
+                        self._open_breakdown_inspector(stdscr, selected)
             elif key in (ord(' '), ord('i')):  # Space or 'i' -> Toggle / Install
                 self._handle_toggle()
             elif key == ord('a'):  # Activate All
@@ -484,6 +490,10 @@ class SkillManagerTUI:
         if card_w < 20:
             return
 
+        if isinstance(item, Plugin):
+            self._draw_plugin_inspector(stdscr, item, start_x, start_y, width, height)
+            return
+
         box_color = self._color(11)
         title_color = self._color(11, curses.A_BOLD)
         meta_color = self._color(12)
@@ -640,6 +650,253 @@ class SkillManagerTUI:
 
             self._safe_addstr(stdscr, rendered_y, start_x, trimmed, attr)
 
+    def _draw_plugin_inspector(
+        self, stdscr, item: Plugin, start_x: int, start_y: int, width: int, height: int
+    ) -> None:
+        """Draw rich Customizations view mirroring the Antigravity IDE GUI."""
+        card_w = width - 2
+        if card_w < 20:
+            return
+
+        lines: List[Tuple[str, int]] = []
+
+        # 1. Breadcrumb Header
+        lines.append((f"Customizations / {item.name}", self._color(6, curses.A_BOLD)))
+        lines.append(("", 0))
+
+        # 2. Description
+        if item.description:
+            for d_line in textwrap.wrap(item.description, width=card_w - 2):
+                lines.append((d_line, self._color(6)))
+            lines.append(("", 0))
+
+        # 3. Suggested Prompts / Examples
+        if item.suggested_prompts:
+            lines.append(("Suggested Prompts / Examples:", self._color(3, curses.A_BOLD)))
+            for sp in item.suggested_prompts[:3]:
+                for sp_line in textwrap.wrap(f'• "{sp}"', width=card_w - 4):
+                    lines.append((f"  {sp_line}", self._color(6)))
+            lines.append(("", 0))
+
+        # 4. Resources
+        if item.resources:
+            lines.append(("Resources", self._color(3, curses.A_BOLD)))
+            for res in item.resources:
+                title = res.get("title", "")
+                url = res.get("url", "")
+                lines.append((f"  • {title} [↗]", self._color(2, curses.A_UNDERLINE)))
+                if url and card_w > 50:
+                    lines.append((f"    {url}", self._color(9)))
+            lines.append(("", 0))
+
+        # 5. Commands (Skills)
+        if item.commands:
+            lines.append((f"Commands ({len(item.commands)}) ▼", self._color(2, curses.A_BOLD)))
+            for cmd_trig, cmd_desc, cmd_tok in item.commands:
+                tok_badge = f"(~{cmd_tok} tok)"
+                hdr = f"  {cmd_trig:<30} {tok_badge}"
+                lines.append((hdr[:card_w], self._color(2, curses.A_BOLD)))
+                if cmd_desc:
+                    for desc_l in textwrap.wrap(cmd_desc, width=card_w - 6):
+                        lines.append((f"    {desc_l}", self._color(6)))
+            lines.append(("", 0))
+
+        # 6. Agents
+        if item.agents:
+            lines.append((f"Agents ({len(item.agents)}) ▼", self._color(11, curses.A_BOLD)))
+            for ag_name, ag_desc, ag_tok in item.agents:
+                tok_badge = f"(~{ag_tok} tok)"
+                hdr = f"  {ag_name:<30} {tok_badge}"
+                lines.append((hdr[:card_w], self._color(11, curses.A_BOLD)))
+                if ag_desc:
+                    for desc_l in textwrap.wrap(ag_desc, width=card_w - 6):
+                        lines.append((f"    {desc_l}", self._color(6)))
+            lines.append(("", 0))
+
+        # 7. MCP servers
+        if item.mcp_servers or item.mcp_tools:
+            cnt = len(item.mcp_servers) or len(item.mcp_tools)
+            lines.append((f"MCP servers ({cnt}) ▼", self._color(8, curses.A_BOLD)))
+            for srv in item.mcp_servers:
+                lines.append((f"  {srv}"[:card_w], self._color(8)))
+            lines.append(("", 0))
+
+        # 8. Rules
+        if item.rules:
+            lines.append((f"Rules ({len(item.rules)}) ▼", self._color(3, curses.A_BOLD)))
+            for r_name, r_desc, r_tok in item.rules:
+                tok_badge = f"(~{r_tok} tok)" if r_tok else ""
+                lines.append((f"  {r_name:<30} {tok_badge}"[:card_w], self._color(3, curses.A_BOLD)))
+                if r_desc:
+                    for desc_l in textwrap.wrap(r_desc, width=card_w - 6):
+                        lines.append((f"    {desc_l}", self._color(6)))
+            lines.append(("", 0))
+
+        # 9. Context usage
+        budget = 20_000
+        pct = (item.tokens / budget) * 100.0
+        lines.append((f"Context usage ({item.tokens:,} tokens)", self._color(6, curses.A_BOLD)))
+        lines.append((f"Customizations    {item.tokens:,} / {budget:,} tokens ({pct:.1f}%)", self._color(2)))
+
+        bar_len = min(28, card_w - 4)
+        s_chars = int(round((item.skills_tokens / budget) * bar_len))
+        m_chars = int(round((item.mcp_tokens / budget) * bar_len))
+        a_chars = int(round((item.agents_tokens / budget) * bar_len))
+        r_chars = int(round((item.rules_tokens / budget) * bar_len))
+        filled_total = s_chars + m_chars + a_chars + r_chars
+        empty_chars = max(0, bar_len - filled_total)
+        bar_str = ("█" * s_chars) + ("▓" * m_chars) + ("▒" * a_chars) + ("░" * r_chars) + ("·" * empty_chars)
+        lines.append((f"[{bar_str}]", self._color(2, curses.A_BOLD)))
+
+        if item.skills_tokens or item.commands:
+            s_pct = (item.skills_tokens / budget) * 100.0
+            cmd_count = len(item.commands)
+            lines.append((
+                f"  • Skills ({item.skills_tokens:,} tokens) {s_pct:.1f}%      [b] Show {cmd_count} breakdowns",
+                self._color(2),
+            ))
+
+        if item.mcp_tokens or item.mcp_tools:
+            m_pct = (item.mcp_tokens / budget) * 100.0
+            m_count = len(item.mcp_tools)
+            warn_str = f"  ⚠️ {item.excluded_tools_count} excluded" if item.excluded_tools_count else ""
+            lines.append((
+                f"  • Mcp Tools ({item.mcp_tokens:,} tokens) {m_pct:.1f}%{warn_str}      [b] Show {m_count} breakdowns",
+                self._color(11),
+            ))
+
+        if item.agents_tokens or item.agents:
+            a_pct = (item.agents_tokens / budget) * 100.0
+            a_count = len(item.agents)
+            lines.append((
+                f"  • Subagents ({item.agents_tokens:,} tokens) {a_pct:.1f}%      [b] Show {a_count} breakdowns",
+                self._color(4),
+            ))
+
+        if item.rules_tokens or item.rules:
+            r_pct = (item.rules_tokens / budget) * 100.0
+            r_count = len(item.rules)
+            lines.append((
+                f"  • Rules ({item.rules_tokens:,} tokens) {r_pct:.1f}%      [b] Show {r_count} breakdowns",
+                self._color(3),
+            ))
+
+        lines.append(("", 0))
+        lines.append((
+            f"Version {item.version} · Status: {'● Enabled' if item.is_active else '○ Disabled (Press Space to toggle)'}",
+            self._color(9),
+        ))
+        lines.append((
+            "Tip: Press [b] or [Enter] to open interactive breakdown & cherry-pick components.",
+            self._color(10, curses.A_BOLD),
+        ))
+
+        # Render lines with detail_scroll offset
+        for p_idx in range(height):
+            line_idx = p_idx + self.detail_scroll
+            if line_idx >= len(lines):
+                break
+            txt, attr = lines[line_idx]
+            self._safe_addstr(stdscr, start_y + p_idx, start_x, txt[:card_w], attr)
+
+    def _open_breakdown_inspector(self, stdscr, plugin: Plugin) -> None:
+        """Modal subcomponent inspector & cherry-picker for power users."""
+        if not plugin.breakdowns:
+            return
+
+        selected_b_idx = 0
+        b_scroll = 0
+
+        while True:
+            max_y, max_x = stdscr.getmaxyx()
+            stdscr.clear()
+
+            modal_w = min(110, max_x - 4)
+            modal_h = min(28, max_y - 4)
+            start_x = (max_x - modal_w) // 2
+            start_y = (max_y - modal_h) // 2
+
+            # Outer box
+            box_attr = self._color(2, curses.A_BOLD)
+            title = f" [Breakdown Inspector] Customizations / {plugin.name} ({plugin.tokens:,} tokens) "
+            top_dashes = "─" * max(1, modal_w - 2 - len(title))
+            self._safe_addstr(stdscr, start_y, start_x, f"┌{title}{top_dashes}┐", box_attr)
+
+            for my in range(1, modal_h - 1):
+                self._safe_addstr(stdscr, start_y + my, start_x, "│" + " " * (modal_w - 2) + "│", box_attr)
+
+            bot_dashes = "─" * (modal_w - 2)
+            self._safe_addstr(stdscr, start_y + modal_h - 1, start_x, f"└{bot_dashes}┘", box_attr)
+
+            # Sub-header: instructions
+            instr = " [↑/↓] Navigate  [Space] Toggle Component  [a/d] All/None  [Esc/q/Enter] Done "
+            self._safe_addstr(stdscr, start_y + 1, start_x + 2, instr, self._color(10, curses.A_BOLD))
+
+            # Budget bar inside modal
+            pct = (plugin.tokens / 20_000) * 100.0
+            meter_line = f" Plugin Context: {plugin.tokens:,} / 20,000 tokens ({pct:.1f}%) "
+            self._safe_addstr(stdscr, start_y + 2, start_x + 2, meter_line, self._color(6))
+
+            content_rows = modal_h - 6
+            if selected_b_idx < b_scroll:
+                b_scroll = selected_b_idx
+            elif selected_b_idx >= b_scroll + content_rows:
+                b_scroll = selected_b_idx - content_rows + 1
+
+            for r_i in range(content_rows):
+                b_idx = b_scroll + r_i
+                if b_idx >= len(plugin.breakdowns):
+                    break
+                b = plugin.breakdowns[b_idx]
+                curr_y = start_y + 4 + r_i
+
+                is_sel = (b_idx == selected_b_idx)
+                bullet = "●" if b.is_active else "○"
+                bullet_attr = self._color(2) if b.is_active else self._color(9)
+                cat_badge = f"[{b.category.upper()}]"
+                tok_badge = f"{b.tokens:,} tok ({(b.tokens / 20000) * 100:.1f}%)"
+                if b.is_excluded:
+                    tok_badge += " ⚠️ excl"
+
+                name_str = b.name
+                desc_str = b.description.replace("\n", " ")
+                line_str = f" {bullet} {cat_badge:<12} {name_str:<26} {tok_badge:<18} {desc_str}"
+                line_str = line_str[:modal_w - 4]
+
+                if is_sel:
+                    attr = self._color(1, curses.A_BOLD) if self.has_colors else curses.A_REVERSE
+                    self._safe_addstr(stdscr, curr_y, start_x + 2, line_str.ljust(modal_w - 4), attr)
+                else:
+                    self._safe_addstr(stdscr, curr_y, start_x + 2, " ")
+                    self._safe_addstr(stdscr, curr_y, start_x + 3, bullet, bullet_attr)
+                    self._safe_addstr(stdscr, curr_y, start_x + 5, f"{cat_badge:<12}", self._color(4))
+                    self._safe_addstr(stdscr, curr_y, start_x + 18, f"{name_str:<26}", curses.A_BOLD)
+                    self._safe_addstr(stdscr, curr_y, start_x + 45, f"{tok_badge:<18}", self._color(2))
+                    self._safe_addstr(stdscr, curr_y, start_x + 64, desc_str[:modal_w - 66], self._color(6))
+
+            stdscr.refresh()
+            k = stdscr.getch()
+
+            if k in (27, ord('q'), ord('\n'), curses.KEY_ENTER, ord('b')):
+                break
+            elif k in (curses.KEY_UP, ord('k')):
+                if selected_b_idx > 0:
+                    selected_b_idx -= 1
+            elif k in (curses.KEY_DOWN, ord('j')):
+                if selected_b_idx < len(plugin.breakdowns) - 1:
+                    selected_b_idx += 1
+            elif k == ord(' '):  # Toggle subcomponent
+                curr_b = plugin.breakdowns[selected_b_idx]
+                self.registry.toggle_plugin_component(plugin.name, curr_b.name)
+            elif k == ord('a'):  # Enable all
+                for b in plugin.breakdowns:
+                    if not b.is_active:
+                        self.registry.toggle_plugin_component(plugin.name, b.name)
+            elif k == ord('d'):  # Disable all
+                for b in plugin.breakdowns:
+                    if b.is_active:
+                        self.registry.toggle_plugin_component(plugin.name, b.name)
+
     def _draw_status_dashboard(self, stdscr, max_y: int, max_x: int) -> None:
         """Draw full status & context window health dashboard."""
         y = 3
@@ -713,7 +970,7 @@ class SkillManagerTUI:
     def _draw_footer(self, stdscr, max_y: int, max_x: int) -> None:
         """Draw bottom shortcut bar."""
         footer_shortcuts = (
-            "[1-7] Tabs  [m] Market  [↑/↓] Nav  [Space/i] Toggle/Install  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
+            "[1-7] Tabs  [b/Enter] Breakdowns  [Space/i] Toggle/Install  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
         )
         line = footer_shortcuts.ljust(max_x - 1)[:max_x - 1]
         attr = self._color(7, curses.A_BOLD) if self.has_colors else curses.A_REVERSE

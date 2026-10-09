@@ -22,10 +22,10 @@ class EntityType(str, Enum):
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count for prompt listing / documentation text."""
+    """Estimate token count for prompt listing / documentation text (Antigravity standard: ~3.04 chars/token)."""
     if not text:
         return 0
-    return max(1, round(len(text) / 2.75))
+    return max(1, round(len(text) / 3.0388))
 
 
 def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
@@ -203,10 +203,23 @@ class Subagent:
 
 
 @dataclass
+class ComponentBreakdown:
+    name: str
+    category: str  # "Skills", "Subagents", "Mcp Tools", "Rules"
+    description: str
+    tokens: int
+    is_active: bool = True
+    is_excluded: bool = False
+    details: str = ""
+
+
+@dataclass
 class Plugin:
     name: str
     path: Path
     dir_name: str = ""
+    display_name: str = ""
+    version: str = "1.0.0"
     tier: str = "INSTALLED"
     scope: Scope = Scope.GLOBAL
     author: str = "Google Cloud / Ecosystem"
@@ -216,6 +229,51 @@ class Plugin:
     is_active: bool = True
     skills: List[str] = field(default_factory=list)
     mcp_servers: List[str] = field(default_factory=list)
+
+    # Rich UI & metadata fields matching Antigravity IDE Customizations
+    suggested_prompts: List[str] = field(default_factory=list)
+    resources: List[Dict[str, str]] = field(default_factory=list)
+    commands: List[Tuple[str, str, int]] = field(default_factory=list)  # (trigger, desc, tokens)
+    agents: List[Tuple[str, str, int]] = field(default_factory=list)    # (name, desc, tokens)
+    mcp_tools: List[Tuple[str, str, int, bool]] = field(default_factory=list) # (name, server/url, tokens, is_excluded)
+    rules: List[Tuple[str, str, int]] = field(default_factory=list)     # (name, desc, tokens)
+
+    # Token category breakdown
+    skills_tokens: int = 0
+    agents_tokens: int = 0
+    mcp_tokens: int = 0
+    rules_tokens: int = 0
+    excluded_tools_count: int = 0
+
+    # Itemized breakdowns
+    breakdowns: List[ComponentBreakdown] = field(default_factory=list)
+
+    # Extra metadata
+    homepage: str = ""
+    repository: str = ""
+    license: str = ""
+
+    @property
+    def active_tokens(self) -> int:
+        """Tokens contributing to active context when plugin is enabled."""
+        return self.tokens if self.is_active else 0
+
+    def recalculate_tokens(self) -> int:
+        """Recalculate tokens based on breakdown item states."""
+        if not self.breakdowns:
+            return self.tokens
+
+        s_tok = sum(b.tokens for b in self.breakdowns if b.category == "Skills" and b.is_active)
+        a_tok = sum(b.tokens for b in self.breakdowns if b.category == "Subagents" and b.is_active)
+        m_tok = sum(b.tokens for b in self.breakdowns if b.category == "Mcp Tools" and b.is_active and not b.is_excluded)
+        r_tok = sum(b.tokens for b in self.breakdowns if b.category == "Rules" and b.is_active)
+
+        self.skills_tokens = s_tok
+        self.agents_tokens = a_tok
+        self.mcp_tokens = m_tok
+        self.rules_tokens = r_tok
+        self.tokens = s_tok + a_tok + m_tok + r_tok
+        return self.tokens
 
 
 @dataclass
