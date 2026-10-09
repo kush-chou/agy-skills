@@ -247,3 +247,8 @@ def run_install(pack_name: str, scope: Scope, workspace_root: Path, home_dir: Op
     success, message = install_catalog_pack(pack_name, target_dir, scope_str)
     print(f"\n{message}\n")
     return 0 if success else 1
+
+
+if __name__ == "__main__":
+    from .main import main
+    main()

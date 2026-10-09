@@ -1,0 +1,23 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "agy-skills"
+version = "0.1.0"
+description = "Fast, modular context package manager for Google Antigravity & Gemini CLI"
+readme = "GEMINI.md"
+requires-python = ">=3.9"
+authors = [
+    { name = "Kushagra Choudhary" }
+]
+keywords = ["antigravity", "gemini-cli", "skills", "agents", "ai-context", "package-manager"]
+dependencies = []
+
+[project.scripts]
+agy-skills = "agy_skills.main:main"
+agy-skill = "agy_skills.main:main"
+
+[tool.setuptools.packages.find]
+where = ["."]
+include = ["agy_skills*"]

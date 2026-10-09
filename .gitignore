@@ -7,3 +7,10 @@ htmlcov/
 .DS_Store
 *.swp
 *.swo
+*.egg-info/
+dist/
+build/
+.vercel/
+web/node_modules/
+web/.next/
+web/.env*.local
