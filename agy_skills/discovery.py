@@ -233,9 +233,30 @@ class CustomizationRegistry:
 
         # Query live state from Antigravity Language Server if available
         live_plugins_map = {}
+        plugin_cache_file = self.global_config_dir / "antigravity_plugins_state_cache.json"
         if self.plugin_client.is_available():
             for lp in self.plugin_client.get_all_plugins():
                 live_plugins_map[lp["dir"]] = lp
+            try:
+                plugin_cache_file.parent.mkdir(parents=True, exist_ok=True)
+                plugin_cache_file.write_text(json.dumps(live_plugins_map, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+        elif plugin_cache_file.is_file():
+            try:
+                live_plugins_map = json.loads(plugin_cache_file.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+
+        # Load persisted Antigravity IDE configuration (config.json)
+        config_plugins_map = {}
+        config_file = self.global_config_dir / "config.json"
+        if config_file.is_file():
+            try:
+                cfg_data = json.loads(config_file.read_text(encoding="utf-8"))
+                config_plugins_map = cfg_data.get("plugins", {})
+            except Exception:
+                pass
 
         existing_names = {s.name for s in self.skills}
 
@@ -473,9 +494,14 @@ class CustomizationRegistry:
             all_breakdowns = skill_breakdowns + agent_breakdowns + mcp_breakdowns + rule_breakdowns
             total_tokens = skills_tokens + agents_tokens + mcp_tokens + rules_tokens
 
-            # Live status
+            # Live or configured status
             live_entry = live_plugins_map.get(plug_name)
-            is_active = (not live_entry.get("disabled", False)) if live_entry else True
+            if live_entry is not None:
+                is_active = not live_entry.get("disabled", False)
+            elif plug_name in config_plugins_map:
+                is_active = config_plugins_map[plug_name].get("enabled", True)
+            else:
+                is_active = True
 
             # Create enhanced plugin instance
             self.plugins.append(
@@ -735,6 +761,19 @@ class CustomizationRegistry:
             item.recalculate_tokens()
             if self.plugin_client.is_available():
                 self.plugin_client.set_plugin_enabled(target_key, item.is_active)
+
+            config_file = self.global_config_dir / "config.json"
+            if config_file.is_file():
+                try:
+                    cfg_data = json.loads(config_file.read_text(encoding="utf-8"))
+                    if "plugins" not in cfg_data:
+                        cfg_data["plugins"] = {}
+                    if target_key not in cfg_data["plugins"]:
+                        cfg_data["plugins"][target_key] = {}
+                    cfg_data["plugins"][target_key]["enabled"] = item.is_active
+                    config_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
             return item.is_active
         elif isinstance(item, MCPServer):
             item.is_active = not item.is_active

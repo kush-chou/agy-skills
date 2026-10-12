@@ -126,6 +126,45 @@ class TestDiscovery(unittest.TestCase):
             # Should subtract 374 tokens
             self.assertEqual(plug.active_tokens, 1314 - 374)
 
+    def test_plugin_state_resolution_from_config_json(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            config_dir = home / ".gemini" / "config"
+            plugin_dir = config_dir / "plugins" / "test-plug"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "plugin.json").write_text(
+                '{"name": "test-plug", "version": "1.0.0", "description": "Test Plugin"}',
+                encoding="utf-8",
+            )
+
+            # Persist disabled state in config.json
+            config_file = config_dir / "config.json"
+            config_file.write_text(
+                json.dumps({"plugins": {"test-plug": {"enabled": False}}}),
+                encoding="utf-8",
+            )
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            plug = next((p for p in registry.plugins if p.name == "test-plug"), None)
+            self.assertIsNotNone(plug)
+            # Must reflect disabled state from config.json
+            self.assertFalse(plug.is_active)
+            self.assertEqual(registry.get_total_active_tokens(), 0)
+
+            # Toggle plugin on
+            registry.toggle_item(plug)
+            self.assertTrue(plug.is_active)
+            # config.json should be updated
+            saved_cfg = json.loads(config_file.read_text(encoding="utf-8"))
+            self.assertTrue(saved_cfg["plugins"]["test-plug"]["enabled"])
+
 
 if __name__ == "__main__":
     unittest.main()

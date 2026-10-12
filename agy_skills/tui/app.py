@@ -319,17 +319,27 @@ class SkillManagerTUI:
     def _draw_top_banner(self, stdscr, max_x: int) -> None:
         """Draw top banner with blue background and real-time context token progress meter."""
         scope_label = self.target_scope.value.upper()
-        left_text = f"+ agy-skills [{scope_label}]"
+        left_text = f"+ agy-skills [{scope_label}]" if max_x >= 65 else "+ agy-skills"
 
         active_tokens = self.registry.get_total_active_tokens()
         budget = self.registry.token_budget
-        pct = min(100.0, (active_tokens / budget) * 100.0) if budget > 0 else 0.0
+        pct = (active_tokens / budget) * 100.0 if budget > 0 else 0.0
 
-        bar_len = 18
-        filled_len = int(round((pct / 100.0) * bar_len))
-        bar_chars = ("▓" * filled_len) + ("░" * (bar_len - filled_len))
+        if max_x >= 100:
+            bar_len = 20
+        elif max_x >= 85:
+            bar_len = 16
+        elif max_x >= 72:
+            bar_len = 10
+        else:
+            bar_len = 0
 
-        right_text = f"Context: [{bar_chars}] {active_tokens:,}/{budget:,} tok ({pct:.1f}%)"
+        if bar_len > 0:
+            filled_len = min(bar_len, max(0, int(round((pct / 100.0) * bar_len))))
+            bar_chars = ("▓" * filled_len) + ("░" * (bar_len - filled_len))
+            right_text = f"Context: [{bar_chars}] {active_tokens:,}/{budget:,} tok ({pct:.1f}%)"
+        else:
+            right_text = f"Context: {active_tokens:,}/{budget:,} tok ({pct:.1f}%)"
 
         spacing = max(1, max_x - len(left_text) - len(right_text) - 1)
         full_line = (left_text + (" " * spacing) + right_text).ljust(max_x - 1)[:max_x - 1]
@@ -350,35 +360,40 @@ class SkillManagerTUI:
         ]
 
         x = 1
+        tab_spacing = 2 if max_x >= 100 else 1
         for label, idx in tab_names:
             if idx == self.active_tab_idx:
                 tab_text = f"[{label}]"
                 attr = self._color(2, curses.A_BOLD)
             else:
-                tab_text = f" {label} "
+                tab_text = f" {label} " if max_x >= 100 else f"{label}"
                 attr = self._color(6)
 
             self._safe_addstr(stdscr, 1, x, tab_text, attr)
-            x += len(tab_text) + 2
+            x += len(tab_text) + tab_spacing
 
-        # Right side TARGET badge
+        # Right side TARGET badge: only draw if there is plenty of room so it never gets cut off
         target_badge = f"TARGET: [{self.target_scope.value.upper()}]"
-        badge_x = max(x, max_x - len(target_badge) - 2)
-        attr_badge = self._color(2, curses.A_BOLD)
-        self._safe_addstr(stdscr, 1, badge_x, target_badge, attr_badge)
+        if max_x >= x + len(target_badge) + 3:
+            badge_x = max_x - len(target_badge) - 2
+            attr_badge = self._color(2, curses.A_BOLD)
+            self._safe_addstr(stdscr, 1, badge_x, target_badge, attr_badge)
 
     def _draw_split_view(self, stdscr, max_y: int, max_x: int) -> None:
         """Draw split panel view with categorized list on left and inspector card on right."""
-        split_x = max(34, max_x // 3)
+        if max_x >= 110:
+            split_x = max(42, min(52, int(max_x * 0.38)))
+        elif max_x >= 90:
+            split_x = max(38, int(max_x * 0.40))
+        else:
+            split_x = max(36, int(max_x * 0.45))
+
         content_height = max_y - 3  # Lines 2 to max_y - 2
 
         # Draw vertical separator
-        vline_char = getattr(curses, "ACS_VLINE", "│")
+        div_attr = self._color(8) if self.has_colors else curses.A_DIM
         for y in range(2, max_y - 1):
-            try:
-                stdscr.addch(y, split_x, vline_char)
-            except Exception:
-                self._safe_addstr(stdscr, y, split_x, "│")
+            self._safe_addstr(stdscr, y, split_x, "│", div_attr)
 
         # Build flattened display rows for left pane
         grouped = self.get_current_items_grouped()
@@ -449,19 +464,22 @@ class SkillManagerTUI:
                     tokens = getattr(item, "tokens", 0)
                     tok_str = f"~{tokens}t"
 
-                # Row text layout
-                prefix = f" {bullet} {name}"
-                max_prefix_len = split_x - len(tok_str) - 3
-                if len(prefix) > max_prefix_len:
-                    prefix = prefix[:max_prefix_len - 1] + "…"
+                # Row text layout with guaranteed breathing room
+                tok_col = split_x - len(tok_str) - 1
+                available_name_len = max(8, tok_col - 5)  # 3 chars prefix " ● ", 2 spaces buffer before tok_str
 
-                spacing = max(1, split_x - len(prefix) - len(tok_str) - 1)
-                full_row = (prefix + (" " * spacing) + tok_str).ljust(split_x)[:split_x]
+                if len(name) > available_name_len:
+                    disp_name = name[:available_name_len - 1] + "…"
+                else:
+                    disp_name = name
 
                 if is_selected:
                     # Inverted Cyan highlight across entire width
                     sel_attr = self._color(1, curses.A_BOLD) if self.has_colors else curses.A_REVERSE
-                    self._safe_addstr(stdscr, y, 0, full_row, sel_attr)
+                    self._safe_addstr(stdscr, y, 0, " " * split_x, sel_attr)
+                    self._safe_addstr(stdscr, y, 1, bullet, sel_attr)
+                    self._safe_addstr(stdscr, y, 3, disp_name, sel_attr)
+                    self._safe_addstr(stdscr, y, tok_col, tok_str, sel_attr)
                 else:
                     # Unselected: draw bullet and text with proper colors
                     bullet_attr = (
@@ -472,8 +490,8 @@ class SkillManagerTUI:
 
                     self._safe_addstr(stdscr, y, 0, " ")
                     self._safe_addstr(stdscr, y, 1, bullet, bullet_attr)
-                    self._safe_addstr(stdscr, y, 3, name[:max_prefix_len - 3])
-                    self._safe_addstr(stdscr, y, split_x - len(tok_str) - 1, tok_str, self._color(2))
+                    self._safe_addstr(stdscr, y, 3, disp_name)
+                    self._safe_addstr(stdscr, y, tok_col, tok_str, self._color(2))
 
         # Right pane rendering
         if selectable_items and 0 <= self.selected_index < len(selectable_items):
@@ -481,6 +499,10 @@ class SkillManagerTUI:
             self._draw_inspector_pane(stdscr, selected_item, split_x + 2, 2, max_x - split_x - 3, content_height)
         else:
             self._safe_addstr(stdscr, 3, split_x + 4, "No customizations matching this filter.", curses.A_DIM)
+
+        # Re-ensure vertical divider is drawn
+        for y in range(2, max_y - 1):
+            self._safe_addstr(stdscr, y, split_x, "│", div_attr)
 
     def _draw_inspector_pane(
         self, stdscr, item: Any, start_x: int, start_y: int, width: int, height: int
@@ -621,34 +643,207 @@ class SkillManagerTUI:
                 or getattr(item, "system_prompt", "")
             )
 
-        lines = body_raw.splitlines()
+        rendered_lines = self._render_markdown(body_raw, card_w)
 
         # Render preview lines with scroll offset
         for p_idx in range(preview_height):
             line_idx = p_idx + self.detail_scroll
-            if line_idx >= len(lines):
+            if line_idx >= len(rendered_lines):
                 break
 
-            line_text = lines[line_idx]
+            txt, attr = rendered_lines[line_idx]
             rendered_y = curr_y + p_idx
+            self._safe_addstr(stdscr, rendered_y, start_x, txt[:card_w], attr)
 
-            trimmed = line_text[:card_w]
-            attr = 0
+    def _render_markdown(self, markdown_text: str, width: int) -> List[Tuple[str, int]]:
+        """Cleanly render markdown text for curses terminal display."""
+        if not markdown_text:
+            return []
 
-            if trimmed.startswith("# "):
-                attr = self._color(8, curses.A_BOLD)
-            elif trimmed.startswith("## "):
-                attr = self._color(2, curses.A_BOLD)
-            elif trimmed.startswith("### "):
-                attr = self._color(4, curses.A_BOLD)
-            elif re.match(r"^\s*(\d+\.|\-|\*)\s+\*\*", trimmed):
-                attr = self._color(6, curses.A_BOLD)
-            elif trimmed.startswith("```"):
-                attr = self._color(3)
-            else:
-                attr = self._color(6)
+        rendered: List[Tuple[str, int]] = []
+        raw_lines = markdown_text.splitlines()
+        in_code_block = False
+        table_buffer: List[str] = []
 
-            self._safe_addstr(stdscr, rendered_y, start_x, trimmed, attr)
+        def clean_inline(text: str) -> str:
+            # Strip links [label](url) -> label
+            t = re.sub(r"\[(.*?)\]\((.*?)\)", r"\1", text)
+            # Strip bold **text** or __text__
+            t = re.sub(r"\*\*(.*?)\*\*", r"\1", t)
+            t = re.sub(r"__(.*?)__", r"\1", t)
+            # Strip inline code `code`
+            t = re.sub(r"`(.*?)`", r"\1", t)
+            # Strip italic *text* or _text_
+            t = re.sub(r"(?<!\*)\*(?!\*)(.*?)(?<!\*)\*(?!\*)", r"\1", t)
+            return t.strip()
+
+        def flush_table(buf: List[str]):
+            if not buf:
+                return
+            rows = []
+            for t_line in buf:
+                parts = [c.strip() for c in t_line.split("|")]
+                if len(parts) >= 2 and parts[0] == "":
+                    parts = parts[1:]
+                if len(parts) >= 1 and parts[-1] == "":
+                    parts = parts[:-1]
+                if parts:
+                    rows.append(parts)
+
+            if not rows:
+                return
+
+            has_sep = False
+            sep_idx = -1
+            for idx, r in enumerate(rows):
+                if all(re.match(r"^:?-+:?$", c) for c in r):
+                    has_sep = True
+                    sep_idx = idx
+                    break
+
+            if not has_sep:
+                for b_line in buf:
+                    clean_text = clean_inline(b_line)
+                    for w_l in textwrap.wrap(clean_text, width=max(10, width - 2)):
+                        rendered.append((w_l, self._color(6)))
+                return
+
+            header_row = rows[0] if sep_idx > 0 else []
+            data_rows = [r for idx, r in enumerate(rows) if idx != sep_idx and (sep_idx == 0 or idx > sep_idx)]
+
+            num_cols = max(len(r) for r in rows if not all(re.match(r"^:?-+:?$", c) for c in r))
+            if num_cols == 0:
+                return
+
+            clean_headers = [clean_inline(header_row[i]) if i < len(header_row) else "" for i in range(num_cols)]
+            clean_data = [
+                [clean_inline(row[i]) if i < len(row) else "" for i in range(num_cols)]
+                for row in data_rows
+            ]
+
+            col_widths = [len(h) for h in clean_headers]
+            for r in clean_data:
+                for i, c in enumerate(r):
+                    col_widths[i] = max(col_widths[i], len(c))
+            col_widths = [max(3, w) for w in col_widths]
+
+            total_dividers = (num_cols - 1) * 3
+            avail_w = max(num_cols * 4, width - total_dividers)
+            total_content_w = sum(col_widths)
+            if total_content_w > avail_w:
+                scale = avail_w / total_content_w
+                col_widths = [max(4, int(w * scale)) for w in col_widths]
+
+            hdr_parts = [clean_headers[i].ljust(col_widths[i])[:col_widths[i]] for i in range(num_cols)]
+            rendered.append((" │ ".join(hdr_parts), self._color(2, curses.A_BOLD)))
+            sep_parts = ["─" * col_widths[i] for i in range(num_cols)]
+            rendered.append(("─┼─".join(sep_parts), self._color(9)))
+            for r in clean_data:
+                row_parts = [r[i].ljust(col_widths[i])[:col_widths[i]] for i in range(num_cols)]
+                rendered.append((" │ ".join(row_parts), self._color(6)))
+            rendered.append(("", 0))
+
+        for line in raw_lines:
+            stripped = line.strip()
+
+            if "|" in stripped and not in_code_block:
+                table_buffer.append(stripped)
+                continue
+            elif table_buffer:
+                flush_table(table_buffer)
+                table_buffer = []
+
+            if stripped.startswith("```"):
+                if not in_code_block:
+                    in_code_block = True
+                    code_lang = stripped[3:].strip()
+                    lang_lbl = f" [ {code_lang} ]" if code_lang else " [code]"
+                    code_w = max(10, width - 2)
+                    dash_cnt = max(0, code_w - len(lang_lbl) - 2)
+                    rendered.append((f"┌─{lang_lbl}{'─' * dash_cnt}┐"[:width], self._color(3, curses.A_BOLD)))
+                else:
+                    in_code_block = False
+                    code_w = max(10, width - 2)
+                    dash_cnt = max(0, code_w - 2)
+                    rendered.append((f"└{'─' * dash_cnt}┘"[:width], self._color(3)))
+                continue
+
+            if in_code_block:
+                code_w = max(10, width - 2)
+                inner_w = max(0, code_w - 4)
+                code_line = f"│ {line[:inner_w].ljust(inner_w)} │"
+                rendered.append((code_line[:width], self._color(3)))
+                continue
+
+            if not stripped:
+                if rendered and rendered[-1][0] != "":
+                    rendered.append(("", 0))
+                continue
+
+            if re.match(r"^((\-\s*){3,}|(\*\s*){3,}|(_\s*){3,})$", stripped):
+                rendered.append(("─" * min(width, 48), self._color(9)))
+                continue
+
+            if stripped.startswith("# "):
+                h_text = clean_inline(stripped[2:])
+                rendered.append((f"◆ {h_text}", self._color(8, curses.A_BOLD)))
+                rendered.append(("─" * min(width, len(h_text) + 2), self._color(8)))
+                continue
+
+            if stripped.startswith("## "):
+                h_text = clean_inline(stripped[3:])
+                rendered.append((f"▸ {h_text}", self._color(2, curses.A_BOLD)))
+                continue
+
+            if stripped.startswith("### "):
+                h_text = clean_inline(stripped[4:])
+                rendered.append((f"• {h_text}", self._color(4, curses.A_BOLD)))
+                continue
+
+            if stripped.startswith("#### "):
+                h_text = clean_inline(stripped[5:])
+                rendered.append((f"  {h_text}", self._color(6, curses.A_BOLD)))
+                continue
+
+            bullet_match = re.match(r"^(\*|\-|\+)\s+(.*)$", stripped)
+            if bullet_match:
+                item_text = clean_inline(bullet_match.group(2))
+                wrapped = textwrap.wrap(item_text, width=max(10, width - 6))
+                if wrapped:
+                    rendered.append((f"  • {wrapped[0]}", self._color(6)))
+                    for w_l in wrapped[1:]:
+                        rendered.append((f"    {w_l}", self._color(6)))
+                else:
+                    rendered.append(("  •", self._color(6)))
+                continue
+
+            num_match = re.match(r"^(\d+\.)\s+(.*)$", stripped)
+            if num_match:
+                prefix = num_match.group(1)
+                item_text = clean_inline(num_match.group(2))
+                indent_len = len(prefix) + 3
+                wrapped = textwrap.wrap(item_text, width=max(10, width - indent_len - 2))
+                if wrapped:
+                    rendered.append((f"  {prefix} {wrapped[0]}", self._color(6)))
+                    for w_l in wrapped[1:]:
+                        rendered.append((f"{' ' * indent_len}{w_l}", self._color(6)))
+                else:
+                    rendered.append((f"  {prefix}", self._color(6)))
+                continue
+
+            clean_text = clean_inline(stripped)
+            for w_l in textwrap.wrap(clean_text, width=max(10, width - 2)):
+                rendered.append((w_l, self._color(6)))
+
+        if table_buffer:
+            flush_table(table_buffer)
+
+        if in_code_block:
+            code_w = max(10, width - 2)
+            dash_cnt = max(0, code_w - 2)
+            rendered.append((f"└{'─' * dash_cnt}┘"[:width], self._color(3)))
+
+        return rendered
 
     def _draw_plugin_inspector(
         self, stdscr, item: Plugin, start_x: int, start_y: int, width: int, height: int
@@ -902,10 +1097,10 @@ class SkillManagerTUI:
         y = 3
         active_tokens = self.registry.get_total_active_tokens()
         budget = self.registry.token_budget
-        pct = min(100.0, (active_tokens / budget) * 100.0) if budget > 0 else 0.0
+        pct = (active_tokens / budget) * 100.0 if budget > 0 else 0.0
 
         bar_len = min(40, max_x - 30)
-        filled_len = int(round((pct / 100.0) * bar_len))
+        filled_len = min(bar_len, max(0, int(round((pct / 100.0) * bar_len))))
         bar_chars = ("▓" * filled_len) + ("░" * (bar_len - filled_len))
 
         self._safe_addstr(stdscr, y, 4, "=== Antigravity Context Window & Customization Health ===", curses.A_BOLD)
@@ -967,12 +1162,23 @@ class SkillManagerTUI:
         y += 1
         self._safe_addstr(stdscr, y, 4, f"  • Target Scope   : [{self.target_scope.value.upper()}] (Press [Tab] to toggle)")
 
+    def _get_footer_text(self, max_x: int) -> str:
+        """Return responsive footer shortcut string tailored to terminal width."""
+        if max_x >= 115:
+            return "[1-7] Tabs  [b/Enter] Breakdowns  [Space/i] Toggle/Install  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
+        elif max_x >= 98:
+            return "[1-7] Tabs  [b] Breakdowns  [Space] Toggle  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
+        elif max_x >= 80:
+            return "[1-7] Tabs [b] Detail [Space] Toggle [a/d] All [Tab] Scope [/] Filter [q] Quit"
+        elif max_x >= 60:
+            return "[1-7] Tabs [Space] Toggle [Tab] Scope [/] Filter [q] Quit"
+        else:
+            return "[1-7] Tabs [Space] Toggle [/] Filter [q] Quit"
+
     def _draw_footer(self, stdscr, max_y: int, max_x: int) -> None:
         """Draw bottom shortcut bar."""
-        footer_shortcuts = (
-            "[1-7] Tabs  [b/Enter] Breakdowns  [Space/i] Toggle/Install  [a/d] All/None  [Tab] Scope  [/] Filter  [q] Quit"
-        )
-        line = footer_shortcuts.ljust(max_x - 1)[:max_x - 1]
+        footer_text = self._get_footer_text(max_x)
+        line = footer_text.ljust(max_x - 1)[:max_x - 1]
         attr = self._color(7, curses.A_BOLD) if self.has_colors else curses.A_REVERSE
         self._safe_addstr(stdscr, max_y - 1, 0, line, attr)
 
