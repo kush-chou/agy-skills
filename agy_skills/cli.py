@@ -9,54 +9,73 @@ from .discovery import CustomizationRegistry
 from .models import Plugin, Scope
 
 
-def print_list(registry: CustomizationRegistry) -> None:
+def print_list(registry: CustomizationRegistry, filter_scope: Optional[Scope] = None) -> None:
     skills, rules = registry.discover_all()
     active_tok = registry.get_total_active_tokens()
     budget = registry.token_budget
     pct = (active_tok / budget) * 100.0 if budget > 0 else 0.0
 
-    print(f"\n📂 Workspace Root: {registry.workspace_root}")
+    print(f"\n📂 Workspace Root: {registry.workspace_gemini_dir} \033[2m({registry.workspace_root})\033[0m")
     print(f"🏠 Global Config:   {registry.global_config_dir}")
     print(f"📊 Active Context:  {active_tok:,} / {budget:,} tokens ({pct:.1f}%)\n")
 
-    print(f"=== Antigravity Skills ({len(skills)} found) ===")
+    if filter_scope:
+        if filter_scope == Scope.GLOBAL:
+            skills = [s for s in skills if s.scope in (Scope.GLOBAL, Scope.BUILTIN)]
+            rules = [r for r in rules if r.scope == Scope.GLOBAL]
+        else:
+            skills = [s for s in skills if s.scope == Scope.WORKSPACE]
+            rules = [r for r in rules if r.scope == Scope.WORKSPACE]
+
+    print(f"\033[1;32m=== Antigravity Skills ({len(skills)} found) ===\033[0m")
     if not skills:
         print("  (None found)")
     else:
         for s in skills:
-            status = "✔ valid" if s.is_valid else f"✖ {len(s.validation_errors)} error(s)"
+            status = "\033[32m✔ valid\033[0m" if s.is_valid else f"\033[31m✖ {len(s.validation_errors)} error(s)\033[0m"
+            act_badge = "●" if s.is_active else "○"
             scope_badge = f"[{s.scope.value.upper()}]"
             tok_str = f"~{s.tokens}t"
-            print(f"  • {s.name:<28} {scope_badge:<11} {tok_str:<6} {status:<12} {s.description[:40]}...")
+            print(f"  {act_badge} {s.name:<28} {scope_badge:<11} {tok_str:<6} {status:<20} {s.description[:40]}...")
 
-    print(f"\n=== Antigravity Rules ({len(rules)} found) ===")
+    print(f"\n\033[1;37m=== Antigravity Rules ({len(rules)} found) ===\033[0m")
     if not rules:
         print("  (None found)")
     else:
         for r in rules:
-            status = "✔ valid" if r.is_valid else f"✖ {len(r.validation_errors)} error(s)"
+            status = "\033[32m✔ valid\033[0m" if r.is_valid else f"\033[31m✖ {len(r.validation_errors)} error(s)\033[0m"
+            act_badge = "●" if r.is_active else "○"
             scope_badge = f"[{r.scope.value.upper()}]"
             size_kb = f"{r.size_bytes / 1024:.1f} KB"
             tok_str = f"~{r.tokens}t"
-            print(f"  • {r.name:<28} {scope_badge:<11} {tok_str:<6} {status:<12} ({size_kb})")
+            print(f"  {act_badge} {r.name:<28} {scope_badge:<11} {tok_str:<6} {status:<20} ({size_kb})")
 
-    if registry.subagents:
-        print(f"\n=== Antigravity Subagents ({len(registry.subagents)} found) ===")
-        for sub in registry.subagents:
+    subagents = registry.subagents
+    if filter_scope:
+        if filter_scope == Scope.WORKSPACE:
+            subagents = [sub for sub in subagents if sub.scope == Scope.WORKSPACE]
+        else:
+            subagents = [sub for sub in subagents if sub.scope in (Scope.GLOBAL, Scope.BUILTIN)]
+
+    if subagents:
+        print(f"\n\033[1;36m=== Antigravity Subagents ({len(subagents)} found) ===\033[0m")
+        for sub in subagents:
+            act_badge = "\033[32m●\033[0m" if sub.is_active else "\033[2m○\033[0m"
             tier_badge = f"[{sub.tier}]"
-            print(f"  • {sub.name:<28} {tier_badge:<11} {sub.role}")
+            print(f"  {act_badge} {sub.name:<28} {tier_badge:<11} ~{sub.tokens}t  {sub.role}")
 
-    if registry.plugins:
-        print(f"\n=== Antigravity Plugins ({len(registry.plugins)} found) ===")
-        for p in registry.plugins:
-            status = "● active" if p.is_active else "○ disabled"
-            print(f"  • {p.name:<28} [INSTALLED]  {status:<12} ~{p.tokens:,} tok  ({p.skills_count} skills)")
+    if not filter_scope or filter_scope == Scope.GLOBAL:
+        if registry.plugins:
+            print(f"\n\033[1;35m=== Antigravity Plugins ({len(registry.plugins)} found) ===\033[0m")
+            for p in registry.plugins:
+                status = "\033[32m● active\033[0m" if p.is_active else "\033[2m○ disabled\033[0m"
+                print(f"  • {p.name:<28} [INSTALLED]  {status:<20} ~{p.tokens:,} tok  ({p.skills_count} skills)")
 
-    if registry.mcp_servers:
-        print(f"\n=== Antigravity MCP Servers ({len(registry.mcp_servers)} found) ===")
-        for m in registry.mcp_servers:
-            status = "● active" if m.is_active else "○ disabled"
-            print(f"  • {m.name:<28} [{m.tools_count} tools]  {status:<12}")
+        if registry.mcp_servers:
+            print(f"\n\033[1;33m=== Antigravity MCP Servers ({len(registry.mcp_servers)} found) ===\033[0m")
+            for m in registry.mcp_servers:
+                status = "\033[32m● active\033[0m" if m.is_active else "\033[2m○ disabled\033[0m"
+                print(f"  • {m.name:<28} [{m.tools_count} tools]  {status:<20}")
 
     print("")
 
@@ -356,7 +375,12 @@ def toggle_plugin_component_cli(registry: CustomizationRegistry, plugin_name: st
     return 0
 
 
-def manage_plugin_cli(registry: CustomizationRegistry, plugin_name: str, action: str = "toggle") -> int:
+def manage_plugin_cli(
+    registry: CustomizationRegistry,
+    plugin_name: str,
+    action: str = "toggle",
+    scope: Scope = Scope.GLOBAL,
+) -> int:
     registry.discover_all()
     target_plugin = next(
         (p for p in registry.plugins if p.name == plugin_name or p.dir_name == plugin_name),
@@ -364,14 +388,6 @@ def manage_plugin_cli(registry: CustomizationRegistry, plugin_name: str, action:
     )
     if not target_plugin:
         print(f"Error: Plugin '{plugin_name}' not found.", file=sys.stderr)
-        return 1
-
-    client = registry.plugin_client
-    if not client.is_available():
-        print(
-            f"Error: Antigravity Language Server not available on port 5387. Cannot update plugin '{plugin_name}'.",
-            file=sys.stderr,
-        )
         return 1
 
     if action == "enable":
@@ -382,14 +398,102 @@ def manage_plugin_cli(registry: CustomizationRegistry, plugin_name: str, action:
         new_state = not target_plugin.is_active
 
     key = target_plugin.dir_name or target_plugin.name
-    success = client.set_plugin_enabled(key, new_state)
-    if success:
-        state_str = "ENABLED" if new_state else "DISABLED"
-        print(f"✔ Plugin '{key}' is now {state_str} (zero restart).")
-        return 0
-    else:
-        print(f"✖ Failed to update plugin '{key}'.", file=sys.stderr)
-        return 1
+    registry.set_plugin_state(key, new_state, scope)
+    target_plugin.is_active = new_state
+    state_str = "ENABLED" if new_state else "DISABLED"
+    scope_str = "Workspace" if scope == Scope.WORKSPACE else "Global"
+    print(f"✔ Plugin '{key}' is now {state_str} ({scope_str} scope in config.json).")
+    return 0
+
+
+def toggle_customization_cli(
+    registry: CustomizationRegistry,
+    name: str,
+    action: str = "enable",
+    item_type: Optional[str] = None,
+    scope: Scope = Scope.WORKSPACE,
+) -> int:
+    """Enable or disable a plugin, skill, subagent, or rule from CLI."""
+    registry.discover_all()
+    wanted_state = (action == "enable")
+
+    # 1. Plugin match
+    if item_type in (None, "plugin"):
+        p = next((x for x in registry.plugins if x.name == name or x.dir_name == name), None)
+        if p:
+            registry.set_plugin_state(p.dir_name or p.name, wanted_state, scope)
+            state_str = "ENABLED" if wanted_state else "DISABLED"
+            print(f"✔ \033[1;35mPlugin\033[0m '{p.name}' is now {state_str} ({scope.value} scope).")
+            return 0
+
+    # 2. Skill match
+    if item_type in (None, "skill"):
+        s = next((x for x in registry.skills if x.name == name), None)
+        if s:
+            if s.is_active != wanted_state:
+                registry.toggle_item(s, target_scope=scope)
+            state_str = "ENABLED" if wanted_state else "DISABLED"
+            print(f"✔ \033[1;32mSkill\033[0m '{s.name}' is now {state_str}.")
+            return 0
+
+    # 3. Subagent match
+    if item_type in (None, "agent", "subagent"):
+        sub = next((x for x in registry.subagents if x.name == name), None)
+        if sub:
+            if sub.is_active != wanted_state:
+                registry.toggle_item(sub, target_scope=scope)
+            state_str = "ENABLED" if wanted_state else "DISABLED"
+            print(f"✔ \033[1;36mSubagent\033[0m '{sub.name}' is now {state_str}.")
+            return 0
+
+    # 4. Rule match
+    if item_type in (None, "rule"):
+        r = next((x for x in registry.rules if x.name == name or x.path.name == name), None)
+        if r:
+            if r.is_active != wanted_state:
+                registry.toggle_item(r, target_scope=scope)
+            state_str = "ENABLED" if wanted_state else "DISABLED"
+            print(f"✔ \033[1;33mRule\033[0m '{r.name}' is now {state_str}.")
+            return 0
+
+    print(f"Error: Customization '{name}' not found.", file=sys.stderr)
+    return 1
+
+
+def print_status(registry: CustomizationRegistry) -> None:
+    """Print complete system status and context gauge matching Antigravity IDE 2.0."""
+    skills, rules = registry.discover_all()
+    active_tok = registry.get_total_active_tokens()
+    budget = registry.token_budget
+    pct = (active_tok / budget) * 100.0 if budget > 0 else 0.0
+
+    print(f"\n\033[1;36mAntigravity Engine & Customizations Diagnostic\033[0m")
+    print("=" * 68)
+    print(f"📂 Workspace Scope:  {registry.workspace_gemini_dir} \033[2m({registry.workspace_root})\033[0m")
+    print(f"🏠 Global Scope:     {registry.global_config_dir}")
+    print(f"🔒 Personal Vault:   ~/.agents/ \033[2m(Protected Zero-Touch Invariant)\033[0m")
+    print("")
+
+    bar_len = 32
+    filled = min(bar_len, max(0, int(round((pct / 100.0) * bar_len))))
+    bar = f"\033[1;36m{'█' * filled}\033[0m\033[2m{'░' * (bar_len - filled)}\033[0m"
+    print(f"Active Context: [{bar}] {active_tok:,} / {budget:,} tokens ({pct:.1f}%)\n")
+
+    breakdown = registry.get_token_breakdown()
+    ws_s_cnt, ws_s_tok = breakdown["workspace_skills"]
+    bi_s_cnt, bi_s_tok = breakdown["builtin_skills"]
+    gl_s_cnt, gl_s_tok = breakdown["global_skills"]
+    r_cnt, r_tok = breakdown["rules"]
+    sub_cnt, sub_tok = breakdown["subagents"]
+    p_cnt, p_tok = breakdown["plugins"]
+    m_cnt, m_tools = breakdown["mcp_servers"]
+
+    print("\033[1;37mActive Components Breakdown:\033[0m")
+    print(f"  • \033[1;36mSubagents\033[0m:    {sub_cnt} active (~{sub_tok:,} tok)")
+    print(f"  • \033[1;32mSkills\033[0m:       {ws_s_cnt + bi_s_cnt + gl_s_cnt} active ({ws_s_cnt} ws, {bi_s_cnt} builtin, {gl_s_cnt} global; ~{ws_s_tok + bi_s_tok + gl_s_tok:,} tok)")
+    print(f"  • \033[1;35mPlugins\033[0m:      {p_cnt} active (~{p_tok:,} tok)")
+    print(f"  • \033[1;33mMCP Servers\033[0m:  {m_cnt} active ({m_tools} tools available)")
+    print(f"  • \033[1;37mRules\033[0m:        {r_cnt} active (~{r_tok:,} tok)\n")
 
 
 def print_search(query: str, workspace_root: Path, home_dir: Optional[Path] = None) -> None:
@@ -418,8 +522,8 @@ def run_install(pack_name: str, scope: Scope, workspace_root: Path, home_dir: Op
         target_dir = home / ".gemini" / "config" / "skills"
         scope_str = "Global (~/.gemini/config/skills)"
     else:
-        target_dir = workspace_root / ".agents" / "skills"
-        scope_str = f"Workspace ({workspace_root}/.agents/skills)"
+        target_dir = workspace_root / ".gemini" / "skills"
+        scope_str = f"Workspace ({workspace_root}/.gemini/skills)"
 
     success, message = install_catalog_pack(pack_name, target_dir, scope_str)
     print(f"\n{message}\n")

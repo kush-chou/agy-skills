@@ -63,14 +63,29 @@ OFFICIAL_IDE_CALIBRATION: Dict[str, Dict[str, Any]] = {
 
 
 def find_workspace_root(start_dir: Optional[Path] = None) -> Path:
-    """Find the workspace root by walking up from start_dir looking for .git or .agents."""
+    """Find the workspace root by walking up from start_dir looking for .git, .gemini, or project .agents."""
     curr = (start_dir or Path.cwd()).resolve()
+    home = Path.home().resolve()
 
     for p in [curr, *curr.parents]:
-        if (p / ".git").exists() or (p / ".agents").exists() or (p / ".agent").exists():
+        if p == home:
+            # Under Invariant 1, never treat the user's home directory as a workspace root
+            continue
+        if (p / ".git").exists() or (p / ".gemini").exists() or (p / ".agents").exists() or (p / ".agent").exists():
             return p
 
     return curr
+
+
+def get_global_config_dir(home_dir: Optional[Path] = None) -> Path:
+    """Return canonical global Antigravity config directory (~/.gemini/config)."""
+    home = home_dir or Path.home()
+    return home / ".gemini" / "config"
+
+
+def get_workspace_dir(workspace_root: Path) -> Path:
+    """Return canonical workspace Antigravity directory (<workspace_root>/.gemini)."""
+    return workspace_root / ".gemini"
 
 
 class CustomizationRegistry:
@@ -79,7 +94,8 @@ class CustomizationRegistry:
     def __init__(self, workspace_root: Optional[Path] = None, home_dir: Optional[Path] = None):
         self.workspace_root = find_workspace_root(workspace_root)
         self.home_dir = home_dir or Path.home()
-        self.global_config_dir = self.home_dir / ".gemini" / "config"
+        self.global_config_dir = get_global_config_dir(self.home_dir)
+        self.workspace_gemini_dir = get_workspace_dir(self.workspace_root)
         self.builtin_dir = self.home_dir / ".gemini" / "antigravity" / "builtin"
         self.token_budget: int = 20_000
 
@@ -90,25 +106,63 @@ class CustomizationRegistry:
         self.subagents: List[Subagent] = []
         self.plugins: List[Plugin] = []
         self.mcp_servers: List[MCPServer] = []
-        self.overrides_file = self.global_config_dir / "agy_skills_overrides.json"
-        self.active_overrides: Dict[str, bool] = self._load_overrides()
 
-    def _load_overrides(self) -> Dict[str, bool]:
-        """Load persistent toggle states from disk."""
-        if self.overrides_file.is_file():
+    def _read_global_config(self) -> dict:
+        """Read global config.json if present."""
+        cfg_path = self.global_config_dir / "config.json"
+        if cfg_path.is_file():
             try:
-                return json.loads(self.overrides_file.read_text(encoding="utf-8"))
+                return json.loads(cfg_path.read_text(encoding="utf-8"))
             except Exception:
                 pass
         return {}
 
-    def _save_overrides(self) -> None:
-        """Persist current toggle states to disk."""
+    def _write_global_config(self, cfg_data: dict) -> None:
+        """Write global config.json safely."""
+        cfg_path = self.global_config_dir / "config.json"
         try:
-            self.overrides_file.parent.mkdir(parents=True, exist_ok=True)
-            self.overrides_file.write_text(json.dumps(self.active_overrides, indent=2), encoding="utf-8")
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
         except Exception:
             pass
+
+    def _read_workspace_config(self) -> dict:
+        """Read workspace config.json if present."""
+        cfg_path = self.workspace_gemini_dir / "config.json"
+        if cfg_path.is_file():
+            try:
+                return json.loads(cfg_path.read_text(encoding="utf-8"))
+            except Exception:
+                pass
+        return {}
+
+    def _write_workspace_config(self, cfg_data: dict) -> None:
+        """Write workspace config.json safely."""
+        cfg_path = self.workspace_gemini_dir / "config.json"
+        try:
+            cfg_path.parent.mkdir(parents=True, exist_ok=True)
+            cfg_path.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+        except Exception:
+            pass
+
+    def _set_entity_config_state(self, entity_category: str, name: str, enabled: bool, scope: Scope = Scope.WORKSPACE) -> None:
+        """Persist entity enabled state to config.json according to scope."""
+        if scope == Scope.WORKSPACE:
+            cfg = self._read_workspace_config()
+            if entity_category not in cfg:
+                cfg[entity_category] = {}
+            if name not in cfg[entity_category]:
+                cfg[entity_category][name] = {}
+            cfg[entity_category][name]["enabled"] = enabled
+            self._write_workspace_config(cfg)
+        else:
+            cfg = self._read_global_config()
+            if entity_category not in cfg:
+                cfg[entity_category] = {}
+            if name not in cfg[entity_category]:
+                cfg[entity_category][name] = {}
+            cfg[entity_category][name]["enabled"] = enabled
+            self._write_global_config(cfg)
 
     def discover_all(self) -> Tuple[List[Skill], List[Rule]]:
         """Run full discovery across workspace, global, builtin, and catalog locations."""
@@ -148,11 +202,51 @@ class CustomizationRegistry:
         return self.skills, self.rules
 
     def _discover_workspace(self) -> None:
-        """Scan workspace root for .agents/skills, rules, GEMINI.md, AGENTS.md."""
+        """Scan workspace root for .gemini/skills, .gemini/rules, GEMINI.md, AGENTS.md, and legacy .agents."""
         ws = self.workspace_root
         if not ws.exists():
             return
 
+        existing_skill_names = set()
+
+        # 1. Canonical Antigravity Workspace: <workspace_root>/.gemini/
+        ws_gemini = self.workspace_gemini_dir
+        if ws_gemini.is_dir():
+            ws_skills_dir = ws_gemini / "skills"
+            if ws_skills_dir.is_dir():
+                for item in sorted(ws_skills_dir.iterdir()):
+                    if item.is_dir():
+                        if item.name == ".disabled":
+                            for dis_item in sorted(item.iterdir()):
+                                if dis_item.is_dir():
+                                    skill = Skill.from_directory(dis_item, Scope.WORKSPACE)
+                                    if skill:
+                                        skill.is_active = False
+                                        self.skills.append(skill)
+                                        existing_skill_names.add(skill.name)
+                        else:
+                            skill = Skill.from_directory(item, Scope.WORKSPACE)
+                            if skill:
+                                self.skills.append(skill)
+                                existing_skill_names.add(skill.name)
+
+            ws_rules_dir = ws_gemini / "rules"
+            if ws_rules_dir.is_dir():
+                for item in sorted(ws_rules_dir.glob("*.md")):
+                    if item.is_file():
+                        rule = Rule.from_file(item, Scope.WORKSPACE, name_override=f".gemini/rules/{item.name}")
+                        if rule:
+                            self.rules.append(rule)
+                ws_rules_dis = ws_rules_dir / ".disabled"
+                if ws_rules_dis.is_dir():
+                    for item in sorted(ws_rules_dis.glob("*.md")):
+                        if item.is_file():
+                            rule = Rule.from_file(item, Scope.WORKSPACE, name_override=f".gemini/rules/.disabled/{item.name}")
+                            if rule:
+                                rule.is_active = False
+                                self.rules.append(rule)
+
+        # 2. Legacy project fallback: <workspace_root>/.agents/ (read-only discovery)
         for agent_dir_name in [".agents", ".agent", "_agents", "_agent"]:
             agent_dir = ws / agent_dir_name
             if agent_dir.is_dir():
@@ -161,9 +255,19 @@ class CustomizationRegistry:
                 if skills_dir.is_dir():
                     for item in sorted(skills_dir.iterdir()):
                         if item.is_dir():
-                            skill = Skill.from_directory(item, Scope.WORKSPACE)
-                            if skill:
-                                self.skills.append(skill)
+                            if item.name == ".disabled":
+                                for dis_item in sorted(item.iterdir()):
+                                    if dis_item.is_dir() and dis_item.name not in existing_skill_names:
+                                        skill = Skill.from_directory(dis_item, Scope.WORKSPACE)
+                                        if skill:
+                                            skill.is_active = False
+                                            self.skills.append(skill)
+                                            existing_skill_names.add(skill.name)
+                            elif item.name not in existing_skill_names:
+                                skill = Skill.from_directory(item, Scope.WORKSPACE)
+                                if skill:
+                                    self.skills.append(skill)
+                                    existing_skill_names.add(skill.name)
 
                 # Rules
                 rules_dir = agent_dir / "rules"
@@ -176,7 +280,7 @@ class CustomizationRegistry:
                             if rule:
                                 self.rules.append(rule)
 
-        # Root GEMINI.md and AGENTS.md
+        # 3. Root GEMINI.md and AGENTS.md
         for rule_name in ["GEMINI.md", "AGENTS.md"]:
             rule_path = ws / rule_name
             if rule_path.is_file():
@@ -205,9 +309,17 @@ class CustomizationRegistry:
         if skills_dir.is_dir():
             for item in sorted(skills_dir.iterdir()):
                 if item.is_dir():
-                    skill = Skill.from_directory(item, Scope.GLOBAL)
-                    if skill:
-                        self.skills.append(skill)
+                    if item.name == ".disabled":
+                        for dis_item in sorted(item.iterdir()):
+                            if dis_item.is_dir():
+                                skill = Skill.from_directory(dis_item, Scope.GLOBAL)
+                                if skill:
+                                    skill.is_active = False
+                                    self.skills.append(skill)
+                    else:
+                        skill = Skill.from_directory(item, Scope.GLOBAL)
+                        if skill:
+                            self.skills.append(skill)
 
         # Global rules
         for rule_name in ["GEMINI.md", "AGENTS.md"]:
@@ -224,6 +336,14 @@ class CustomizationRegistry:
                     rule = Rule.from_file(item, Scope.GLOBAL, name_override=f"global/rules/{item.name}")
                     if rule:
                         self.rules.append(rule)
+            rules_dis = rules_dir / ".disabled"
+            if rules_dis.is_dir():
+                for item in sorted(rules_dis.glob("*.md")):
+                    if item.is_file():
+                        rule = Rule.from_file(item, Scope.GLOBAL, name_override=f"global/rules/.disabled/{item.name}")
+                        if rule:
+                            rule.is_active = False
+                            self.rules.append(rule)
 
     def _discover_catalog_and_plugins(self) -> None:
         """Scan plugins in ~/.gemini/config/plugins/ with exact token accounting and IDE schema."""
@@ -536,8 +656,38 @@ class CustomizationRegistry:
                 )
             )
 
+    def _parse_subagent_file(self, ag_file: Path, scope: Scope, tier: str, is_active: bool = True) -> Optional[Subagent]:
+        """Parse subagent definition from a markdown file."""
+        if not ag_file.is_file():
+            return None
+        try:
+            content = ag_file.read_text(encoding="utf-8", errors="replace")
+            fm, body = parse_frontmatter(content)
+            name = fm.get("name", ag_file.stem)
+            role = fm.get("role", f"{name.replace('-', ' ').title()} Specialist")
+            desc = fm.get("description", body[:120].replace("\n", " ").strip() + "...")
+            model = fm.get("model", "inherit")
+            tools = fm.get("tools", [])
+            if isinstance(tools, str):
+                tools = [t.strip() for t in tools.split(",") if t.strip()]
+            return Subagent(
+                name=name,
+                role=role,
+                description=desc,
+                tier=tier,
+                scope=scope,
+                model=model,
+                system_prompt=body,
+                tokens=estimate_tokens(f"- {name}: {desc}"),
+                is_active=is_active,
+                tools=tools if isinstance(tools, list) else [],
+                path=ag_file,
+            )
+        except Exception:
+            return None
+
     def _discover_subagents(self) -> None:
-        """Discover built-in, plugin, and workspace subagents."""
+        """Discover built-in, global, plugin, and workspace subagents with .disabled/ support."""
         # 1. Built-in subagents
         self.subagents.append(
             Subagent(
@@ -564,7 +714,27 @@ class CustomizationRegistry:
             )
         )
 
-        # 2. Plugin subagents
+        existing_subagent_names = {s.name for s in self.subagents}
+
+        # 2. Global Standalone subagents: ~/.gemini/config/agents/ (+ .disabled/)
+        gl_agents_dir = self.global_config_dir / "agents"
+        if gl_agents_dir.is_dir():
+            for ag_file in sorted(gl_agents_dir.glob("*.md")):
+                if ag_file.is_file():
+                    sub = self._parse_subagent_file(ag_file, Scope.GLOBAL, "GLOBAL", is_active=True)
+                    if sub and sub.name not in existing_subagent_names:
+                        self.subagents.append(sub)
+                        existing_subagent_names.add(sub.name)
+            gl_dis_dir = gl_agents_dir / ".disabled"
+            if gl_dis_dir.is_dir():
+                for ag_file in sorted(gl_dis_dir.glob("*.md")):
+                    if ag_file.is_file():
+                        sub = self._parse_subagent_file(ag_file, Scope.GLOBAL, "GLOBAL", is_active=False)
+                        if sub and sub.name not in existing_subagent_names:
+                            self.subagents.append(sub)
+                            existing_subagent_names.add(sub.name)
+
+        # 3. Plugin subagents: ~/.gemini/config/plugins/<plug>/agents/
         plugins_dir = self.global_config_dir / "plugins"
         if plugins_dir.is_dir():
             for plug in sorted(plugins_dir.iterdir()):
@@ -573,105 +743,130 @@ class CustomizationRegistry:
                 agents_dir = plug / "agents"
                 if agents_dir.is_dir():
                     for ag_file in sorted(agents_dir.glob("*.md")):
-                        name = ag_file.stem
-                        content = ag_file.read_text(encoding="utf-8", errors="replace")
-                        fm, body = parse_frontmatter(content)
-                        role = fm.get("role", f"{name.replace('-', ' ').title()} Specialist")
-                        desc = fm.get("description", body[:120].replace("\n", " ").strip() + "...")
-                        self.subagents.append(
-                            Subagent(
-                                name=name,
-                                role=role,
-                                description=desc,
-                                tier="PLUGIN",
-                                scope=Scope.GLOBAL,
-                                model="inherit",
-                                system_prompt=body,
-                                tokens=estimate_tokens(f"- {name}: {desc}"),
-                                path=ag_file,
-                            )
-                        )
+                        sub = self._parse_subagent_file(ag_file, Scope.GLOBAL, "PLUGIN", is_active=True)
+                        if sub and sub.name not in existing_subagent_names:
+                            self.subagents.append(sub)
+                            existing_subagent_names.add(sub.name)
 
-        # 3. Workspace subagents
+        # 4. Workspace standalone subagents: <workspace_root>/.gemini/agents/ (+ .disabled/)
+        ws_agents_dir = self.workspace_gemini_dir / "agents"
+        if ws_agents_dir.is_dir():
+            for ag_file in sorted(ws_agents_dir.glob("*.md")):
+                if ag_file.is_file():
+                    sub = self._parse_subagent_file(ag_file, Scope.WORKSPACE, "WORKSPACE", is_active=True)
+                    if sub and sub.name not in existing_subagent_names:
+                        self.subagents.append(sub)
+                        existing_subagent_names.add(sub.name)
+            ws_dis_dir = ws_agents_dir / ".disabled"
+            if ws_dis_dir.is_dir():
+                for ag_file in sorted(ws_dis_dir.glob("*.md")):
+                    if ag_file.is_file():
+                        sub = self._parse_subagent_file(ag_file, Scope.WORKSPACE, "WORKSPACE", is_active=False)
+                        if sub and sub.name not in existing_subagent_names:
+                            self.subagents.append(sub)
+                            existing_subagent_names.add(sub.name)
+
+        # 5. Legacy workspace subagents fallback: <workspace_root>/.agents/
         ws = self.workspace_root
         for agent_dir_name in [".agents", ".agent"]:
-            ag_dir = ws / agent_dir_name / "subagents"
-            if ag_dir.is_dir():
-                for item in sorted(ag_dir.glob("*.md")):
-                    name = item.stem
-                    content = item.read_text(encoding="utf-8", errors="replace")
-                    fm, body = parse_frontmatter(content)
-                    role = fm.get("role", "Workspace Specialist")
-                    desc = fm.get("description", "Workspace-specific subagent.")
-                    self.subagents.append(
-                        Subagent(
-                            name=name,
-                            role=role,
-                            description=desc,
-                            tier="WORKSPACE",
-                            scope=Scope.WORKSPACE,
-                            model="inherit",
-                            system_prompt=body,
-                            tokens=estimate_tokens(f"- {name}: {desc}"),
-                            path=item,
-                        )
-                    )
+            for sub_folder in ["agents", "subagents"]:
+                ag_dir = ws / agent_dir_name / sub_folder
+                if ag_dir.is_dir():
+                    for ag_file in sorted(ag_dir.glob("*.md")):
+                        if ag_file.is_file():
+                            sub = self._parse_subagent_file(ag_file, Scope.WORKSPACE, "WORKSPACE", is_active=True)
+                            if sub and sub.name not in existing_subagent_names:
+                                self.subagents.append(sub)
+                                existing_subagent_names.add(sub.name)
+                    legacy_dis = ag_dir / ".disabled"
+                    if legacy_dis.is_dir():
+                        for ag_file in sorted(legacy_dis.glob("*.md")):
+                            if ag_file.is_file():
+                                sub = self._parse_subagent_file(ag_file, Scope.WORKSPACE, "WORKSPACE", is_active=False)
+                                if sub and sub.name not in existing_subagent_names:
+                                    self.subagents.append(sub)
+                                    existing_subagent_names.add(sub.name)
 
     def _discover_mcp_servers(self) -> None:
         """Discover Antigravity root and plugin MCP servers."""
         mcp_dir = self.home_dir / ".gemini" / "antigravity" / "mcp"
-        if not mcp_dir.is_dir():
-            return
-
         user_servers = []
         plugin_servers = []
+        known_names = set()
 
-        for server_dir in sorted(mcp_dir.iterdir()):
-            if not server_dir.is_dir():
-                continue
+        if mcp_dir.is_dir():
+            for server_dir in sorted(mcp_dir.iterdir()):
+                if not server_dir.is_dir():
+                    continue
 
-            name = server_dir.name
-            tools = [
-                f.stem
-                for f in sorted(server_dir.iterdir())
-                if f.suffix == ".json" and f.name != "instructions.md"
-            ]
+                name = server_dir.name
+                tools = [
+                    f.stem
+                    for f in sorted(server_dir.iterdir())
+                    if f.suffix == ".json" and f.name != "instructions.md"
+                ]
 
-            instructions = ""
-            inst_file = server_dir / "instructions.md"
-            if inst_file.is_file():
-                try:
-                    instructions = inst_file.read_text(encoding="utf-8", errors="replace")
-                except Exception:
-                    pass
+                instructions = ""
+                inst_file = server_dir / "instructions.md"
+                if inst_file.is_file():
+                    try:
+                        instructions = inst_file.read_text(encoding="utf-8", errors="replace")
+                    except Exception:
+                        pass
 
-            desc = f"{len(tools)} tools enabled"
-            srv = MCPServer(
-                name=name,
-                tools_count=len(tools),
-                tools=tools,
-                is_active=True,
-                path=server_dir,
-                description=desc,
-                instructions=instructions,
-            )
+                desc = f"{len(tools)} tools enabled"
+                srv = MCPServer(
+                    name=name,
+                    tools_count=len(tools),
+                    tools=tools,
+                    is_active=True,
+                    path=server_dir,
+                    description=desc,
+                    instructions=instructions,
+                )
+                known_names.add(name)
 
-            # Prioritize root user servers like StitchMCP and canva
-            if "_" in name or name.startswith("data-agent-kit"):
-                plugin_servers.append(srv)
-            else:
-                user_servers.append(srv)
+                # Prioritize root user servers like StitchMCP and canva
+                if "_" in name or name.startswith("data-agent-kit"):
+                    plugin_servers.append(srv)
+                else:
+                    user_servers.append(srv)
+
+        # Check ~/.gemini/config/mcp_config.json
+        cfg_mcp = self.global_config_dir / "mcp_config.json"
+        if cfg_mcp.is_file():
+            try:
+                m_data = json.loads(cfg_mcp.read_text(encoding="utf-8"))
+                for srv_name, srv_info in m_data.get("mcpServers", {}).items():
+                    if srv_name not in known_names:
+                        tools_dict = srv_info.get("tools", {})
+                        tools_list = list(tools_dict.keys()) if isinstance(tools_dict, dict) else []
+                        is_act = not srv_info.get("disabled", False)
+                        srv = MCPServer(
+                            name=srv_name,
+                            tools_count=len(tools_list),
+                            tools=tools_list,
+                            is_active=is_act,
+                            description=f"{len(tools_list)} tools configured",
+                        )
+                        user_servers.append(srv)
+                        known_names.add(srv_name)
+                    else:
+                        # Update active status if disabled in config
+                        if srv_info.get("disabled", False):
+                            for s in user_servers + plugin_servers:
+                                if s.name == srv_name:
+                                    s.is_active = False
+            except Exception:
+                pass
 
         self.mcp_servers = user_servers + plugin_servers
 
     def _apply_states_and_overrides(self) -> None:
-        """Mark overrides and apply user toggle states."""
+        """Mark shadow overrides and apply direct config.json states."""
         # Find which skill names exist in multiple scopes (e.g. workspace overrides global/builtin)
-        ws_skill_names = {s.name for s in self.skills if s.scope == Scope.WORKSPACE}
-
         for s in self.skills:
             if s.scope == Scope.WORKSPACE:
-                # Check if it overrides a builtin or global
                 has_shadow = any(
                     other.name == s.name and other.scope != Scope.WORKSPACE
                     for other in self.skills
@@ -679,35 +874,120 @@ class CustomizationRegistry:
                 if has_shadow or getattr(s, "is_overridden", False):
                     s.is_overridden = True
 
-            # Apply state override if set
-            key = f"skill:{s.scope.value}:{s.name}"
-            if key in self.active_overrides:
-                s.is_active = self.active_overrides[key]
+        # Read global and workspace config.json for explicit toggles
+        gl_cfg = self._read_global_config()
+        ws_cfg = self._read_workspace_config()
 
-        for r in self.rules:
-            key = f"rule:{r.scope.value}:{r.name}"
-            if key in self.active_overrides:
-                r.is_active = self.active_overrides[key]
-
-        for sub in self.subagents:
-            key = f"subagent:{sub.scope.value}:{sub.name}"
-            if key in self.active_overrides:
-                sub.is_active = self.active_overrides[key]
-
+        # Apply any explicit plugin states from config
         for p in self.plugins:
-            key = f"plugin:{p.name}"
-            if key in self.active_overrides:
-                p.is_active = self.active_overrides[key]
+            target_key = p.dir_name or p.name
+            if target_key in ws_cfg.get("plugins", {}) and "enabled" in ws_cfg["plugins"][target_key]:
+                p.is_active = ws_cfg["plugins"][target_key]["enabled"]
+            elif target_key in gl_cfg.get("plugins", {}) and "enabled" in gl_cfg["plugins"][target_key]:
+                p.is_active = gl_cfg["plugins"][target_key]["enabled"]
+
+            # Apply component breakdowns from config if present
+            comp_cfgs = gl_cfg.get("plugins", {}).get(target_key, {}).get("components", {})
             for b in p.breakdowns:
-                sub_key = f"plugin_sub:{p.name}:{b.name}"
-                if sub_key in self.active_overrides:
-                    b.is_active = self.active_overrides[sub_key]
+                if b.name in comp_cfgs and "enabled" in comp_cfgs[b.name]:
+                    b.is_active = comp_cfgs[b.name]["enabled"]
             p.recalculate_tokens()
 
+        for s in self.skills:
+            if s.name in ws_cfg.get("skills", {}) and "enabled" in ws_cfg["skills"][s.name]:
+                s.is_active = ws_cfg["skills"][s.name]["enabled"]
+            elif s.name in gl_cfg.get("skills", {}) and "enabled" in gl_cfg["skills"][s.name]:
+                s.is_active = gl_cfg["skills"][s.name]["enabled"]
+
+        for r in self.rules:
+            if r.name in ws_cfg.get("rules", {}) and "enabled" in ws_cfg["rules"][r.name]:
+                r.is_active = ws_cfg["rules"][r.name]["enabled"]
+            elif r.name in gl_cfg.get("rules", {}) and "enabled" in gl_cfg["rules"][r.name]:
+                r.is_active = gl_cfg["rules"][r.name]["enabled"]
+
+        for sub in self.subagents:
+            if sub.name in ws_cfg.get("subagents", {}) and "enabled" in ws_cfg["subagents"][sub.name]:
+                sub.is_active = ws_cfg["subagents"][sub.name]["enabled"]
+            elif sub.name in gl_cfg.get("subagents", {}) and "enabled" in gl_cfg["subagents"][sub.name]:
+                sub.is_active = gl_cfg["subagents"][sub.name]["enabled"]
+
         for m in self.mcp_servers:
-            key = f"mcp:{m.name}"
-            if key in self.active_overrides:
-                m.is_active = self.active_overrides[key]
+            if m.name in gl_cfg.get("mcp_servers", {}) and "enabled" in gl_cfg["mcp_servers"][m.name]:
+                m.is_active = gl_cfg["mcp_servers"][m.name]["enabled"]
+
+    def set_plugin_state(self, plugin_name: str, enabled: bool, scope: Scope = Scope.GLOBAL) -> bool:
+        """Set plugin enabled state directly in Antigravity config without phantom state."""
+        if scope == Scope.WORKSPACE:
+            # Write to workspace config / plugins.json
+            ws_config_file = self.workspace_gemini_dir / "config.json"
+            try:
+                ws_config_file.parent.mkdir(parents=True, exist_ok=True)
+                cfg_data = {}
+                if ws_config_file.is_file():
+                    try:
+                        cfg_data = json.loads(ws_config_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                if "plugins" not in cfg_data:
+                    cfg_data["plugins"] = {}
+                if plugin_name not in cfg_data["plugins"]:
+                    cfg_data["plugins"][plugin_name] = {}
+                cfg_data["plugins"][plugin_name]["enabled"] = enabled
+                ws_config_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+            # Also record exclusion in workspace plugins.json if disabling
+            if not enabled:
+                ws_plugins_file = self.workspace_gemini_dir / "plugins.json"
+                try:
+                    ws_plugins_file.parent.mkdir(parents=True, exist_ok=True)
+                    p_data = {}
+                    if ws_plugins_file.is_file():
+                        try:
+                            p_data = json.loads(ws_plugins_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    inherits = p_data.get("inherits", [])
+                    if not inherits:
+                        inherits = [{"path": "~/.gemini/config/plugins.json", "exclude": []}]
+                        p_data["inherits"] = inherits
+                    for inh in inherits:
+                        excl = inh.get("exclude", [])
+                        if plugin_name not in excl:
+                            excl.append(plugin_name)
+                        inh["exclude"] = excl
+                    ws_plugins_file.write_text(json.dumps(p_data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
+            return True
+        else:
+            # Global scope: directly update ~/.gemini/config/config.json
+            config_file = self.global_config_dir / "config.json"
+            try:
+                config_file.parent.mkdir(parents=True, exist_ok=True)
+                cfg_data = {}
+                if config_file.is_file():
+                    try:
+                        cfg_data = json.loads(config_file.read_text(encoding="utf-8"))
+                    except Exception:
+                        pass
+                if "plugins" not in cfg_data:
+                    cfg_data["plugins"] = {}
+                if plugin_name not in cfg_data["plugins"]:
+                    cfg_data["plugins"][plugin_name] = {}
+                cfg_data["plugins"][plugin_name]["enabled"] = enabled
+                config_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+            except Exception:
+                pass
+
+            # Live language server notification
+            if self.plugin_client.is_available():
+                try:
+                    self.plugin_client.set_plugin_enabled(plugin_name, enabled)
+                except Exception:
+                    pass
+            return True
 
     def toggle_plugin_component(self, plugin_name: str, component_name: str) -> Optional[bool]:
         """Toggle an individual subcomponent within a plugin (skill, tool, agent, rule)."""
@@ -717,76 +997,139 @@ class CustomizationRegistry:
         for b in target_plugin.breakdowns:
             if b.name == component_name:
                 b.is_active = not b.is_active
-                key = f"plugin_sub:{plugin_name}:{component_name}"
-                self.active_overrides[key] = b.is_active
-                self._save_overrides()
+                # Persist into config.json
+                config_file = self.global_config_dir / "config.json"
+                try:
+                    cfg_data = {}
+                    if config_file.is_file():
+                        try:
+                            cfg_data = json.loads(config_file.read_text(encoding="utf-8"))
+                        except Exception:
+                            pass
+                    if "plugins" not in cfg_data:
+                        cfg_data["plugins"] = {}
+                    if plugin_name not in cfg_data["plugins"]:
+                        cfg_data["plugins"][plugin_name] = {}
+                    if "components" not in cfg_data["plugins"][plugin_name]:
+                        cfg_data["plugins"][plugin_name]["components"] = {}
+                    cfg_data["plugins"][plugin_name]["components"][component_name] = {"enabled": b.is_active}
+                    config_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+                except Exception:
+                    pass
                 target_plugin.recalculate_tokens()
                 return b.is_active
         return None
 
-    def toggle_item(self, item, target_scope: Scope = Scope.WORKSPACE) -> bool:
+    def toggle_item(self, item, target_scope: Optional[Scope] = None) -> bool:
         """Toggle active state of an item."""
-        if isinstance(item, Skill):
-            # If in catalog and toggled on with WORKSPACE target:
-            if item.scope == Scope.CATALOG and not item.is_active:
-                item.is_active = True
-                key = f"skill:{item.scope.value}:{item.name}"
-                self.active_overrides[key] = True
-                self._save_overrides()
-                return True
+        if target_scope is None:
+            if isinstance(item, Plugin):
+                target_scope = Scope.GLOBAL
             else:
-                item.is_active = not item.is_active
-                key = f"skill:{item.scope.value}:{item.name}"
-                self.active_overrides[key] = item.is_active
-                self._save_overrides()
-                return item.is_active
-        elif isinstance(item, Rule):
-            item.is_active = not item.is_active
-            key = f"rule:{item.scope.value}:{item.name}"
-            self.active_overrides[key] = item.is_active
-            self._save_overrides()
-            return item.is_active
-        elif isinstance(item, Subagent):
-            item.is_active = not item.is_active
-            key = f"subagent:{item.scope.value}:{item.name}"
-            self.active_overrides[key] = item.is_active
-            self._save_overrides()
-            return item.is_active
-        elif isinstance(item, Plugin):
-            item.is_active = not item.is_active
+                target_scope = getattr(item, "scope", None) or Scope.WORKSPACE
+        if isinstance(item, Plugin):
+            new_state = not item.is_active
             target_key = item.dir_name or item.name
-            key = f"plugin:{target_key}"
-            self.active_overrides[key] = item.is_active
-            self._save_overrides()
+            self.set_plugin_state(target_key, new_state, target_scope)
+            item.is_active = new_state
             item.recalculate_tokens()
-            if self.plugin_client.is_available():
-                self.plugin_client.set_plugin_enabled(target_key, item.is_active)
+            return item.is_active
 
-            config_file = self.global_config_dir / "config.json"
-            if config_file.is_file():
+        elif isinstance(item, Subagent):
+            if item.path and item.path.exists():
                 try:
-                    cfg_data = json.loads(config_file.read_text(encoding="utf-8"))
-                    if "plugins" not in cfg_data:
-                        cfg_data["plugins"] = {}
-                    if target_key not in cfg_data["plugins"]:
-                        cfg_data["plugins"][target_key] = {}
-                    cfg_data["plugins"][target_key]["enabled"] = item.is_active
-                    config_file.write_text(json.dumps(cfg_data, indent=2), encoding="utf-8")
+                    if item.is_active:
+                        dest_dir = item.path.parent / ".disabled"
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        new_path = dest_dir / item.path.name
+                        item.path.rename(new_path)
+                        item.path = new_path
+                        item.is_active = False
+                    else:
+                        if item.path.parent.name == ".disabled":
+                            dest_dir = item.path.parent.parent
+                            new_path = dest_dir / item.path.name
+                            item.path.rename(new_path)
+                            item.path = new_path
+                        item.is_active = True
+                    return item.is_active
                 except Exception:
                     pass
+            item.is_active = not item.is_active
+            self._set_entity_config_state("subagents", item.name, item.is_active, target_scope)
             return item.is_active
+
+        elif isinstance(item, Skill):
+            if item.scope == Scope.CATALOG and not item.is_active:
+                from .catalog import install_catalog_pack
+                target_dir = (
+                    self.workspace_gemini_dir / "skills"
+                    if target_scope == Scope.WORKSPACE
+                    else self.global_config_dir / "skills"
+                )
+                success, _ = install_catalog_pack(item.name, target_dir, target_scope.value)
+                item.is_active = True
+                self.discover_all()
+                return success
+            elif item.path and item.path.is_dir():
+                try:
+                    if item.is_active:
+                        dest_dir = item.path.parent / ".disabled"
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        new_path = dest_dir / item.path.name
+                        item.path.rename(new_path)
+                        item.path = new_path
+                        item.skill_file = new_path / "SKILL.md"
+                        item.is_active = False
+                    else:
+                        if item.path.parent.name == ".disabled":
+                            dest_dir = item.path.parent.parent
+                            new_path = dest_dir / item.path.name
+                            item.path.rename(new_path)
+                            item.path = new_path
+                            item.skill_file = new_path / "SKILL.md"
+                        item.is_active = True
+                    return item.is_active
+                except Exception:
+                    pass
+            item.is_active = not item.is_active
+            self._set_entity_config_state("skills", item.name, item.is_active, target_scope)
+            return item.is_active
+
+        elif isinstance(item, Rule):
+            if item.path and item.path.is_file() and item.path.parent.name in ("rules", ".disabled"):
+                try:
+                    if item.is_active:
+                        dest_dir = item.path.parent / ".disabled" if item.path.parent.name == "rules" else item.path.parent
+                        dest_dir.mkdir(parents=True, exist_ok=True)
+                        new_path = dest_dir / item.path.name
+                        if item.path != new_path:
+                            item.path.rename(new_path)
+                            item.path = new_path
+                        item.is_active = False
+                    else:
+                        dest_dir = item.path.parent.parent
+                        new_path = dest_dir / item.path.name
+                        item.path.rename(new_path)
+                        item.path = new_path
+                        item.is_active = True
+                    return item.is_active
+                except Exception:
+                    pass
+            item.is_active = not item.is_active
+            self._set_entity_config_state("rules", item.name, item.is_active, target_scope)
+            return item.is_active
+
         elif isinstance(item, MCPServer):
             item.is_active = not item.is_active
-            key = f"mcp:{item.name}"
-            self.active_overrides[key] = item.is_active
-            self._save_overrides()
+            self._set_entity_config_state("mcp_servers", item.name, item.is_active, target_scope)
             return item.is_active
+
         elif hasattr(item, "repo") and hasattr(item, "is_installed"):
-            # CatalogSkillPack handling
             from .catalog import install_catalog_pack
             if not getattr(item, "is_installed", False):
                 target_dir = (
-                    self.workspace_root / ".agents" / "skills"
+                    self.workspace_gemini_dir / "skills"
                     if target_scope == Scope.WORKSPACE
                     else self.global_config_dir / "skills"
                 )
@@ -796,6 +1139,7 @@ class CustomizationRegistry:
             else:
                 item.is_active = not getattr(item, "is_active", True)
                 return item.is_active
+
         return False
 
     def activate_all(self, items: list) -> None:

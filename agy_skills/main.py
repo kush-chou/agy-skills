@@ -10,8 +10,10 @@ from .cli import (
     print_lint,
     print_list,
     print_search,
+    print_status,
     print_tokens,
     run_install,
+    toggle_customization_cli,
     toggle_plugin_component_cli,
 )
 from .discovery import CustomizationRegistry
@@ -51,17 +53,51 @@ def main() -> None:
         action="store_true",
         help="Audit active context window usage against the 20,000 token limit.",
     )
+    parser.add_argument(
+        "--status",
+        action="store_true",
+        help="Display comprehensive Antigravity context and customizations status.",
+    )
+    parser.add_argument(
+        "-g", "--global",
+        dest="is_global",
+        action="store_true",
+        help="Operate in global scope (~/.gemini/config) instead of workspace.",
+    )
 
     subparsers = parser.add_subparsers(dest="command", help="Available subcommands")
 
     # list subcommand
-    subparsers.add_parser("list", help="List all customizations non-interactively.")
+    sub_list = subparsers.add_parser("list", help="List all customizations non-interactively.")
+    sub_list.add_argument("-g", "--global", dest="is_global", action="store_true", help="List only global & builtin items.")
+    sub_list.add_argument("-w", "--workspace", dest="is_workspace", action="store_true", help="List only workspace items.")
+
+    # status subcommand
+    subparsers.add_parser("status", help="Display Antigravity token gauge, active plugins, and MCP servers.")
 
     # tokens subcommand
     subparsers.add_parser("tokens", help="Audit active context window token consumption.")
 
     # lint subcommand
     subparsers.add_parser("lint", help="Lint all customizations for Antigravity standard compliance.")
+
+    # enable subcommand
+    sub_enable = subparsers.add_parser("enable", help="Enable a plugin, skill, subagent, or rule.")
+    sub_enable.add_argument("name", help="Name of plugin, skill, subagent, or rule to enable.")
+    sub_enable.add_argument("--plugin", action="store_true", help="Target plugin specifically.")
+    sub_enable.add_argument("--skill", action="store_true", help="Target skill specifically.")
+    sub_enable.add_argument("--agent", "--subagent", action="store_true", help="Target subagent specifically.")
+    sub_enable.add_argument("-g", "--global", dest="is_global", action="store_true", help="Target global scope.")
+    sub_enable.add_argument("-w", "--workspace", dest="is_workspace", action="store_true", help="Target workspace scope.")
+
+    # disable subcommand
+    sub_disable = subparsers.add_parser("disable", help="Disable a plugin, skill, subagent, or rule.")
+    sub_disable.add_argument("name", help="Name of plugin, skill, subagent, or rule to disable.")
+    sub_disable.add_argument("--plugin", action="store_true", help="Target plugin specifically.")
+    sub_disable.add_argument("--skill", action="store_true", help="Target skill specifically.")
+    sub_disable.add_argument("--agent", "--subagent", action="store_true", help="Target subagent specifically.")
+    sub_disable.add_argument("-g", "--global", dest="is_global", action="store_true", help="Target global scope.")
+    sub_disable.add_argument("-w", "--workspace", dest="is_workspace", action="store_true", help="Target workspace scope.")
 
     # info / inspect subcommand
     sub_info = subparsers.add_parser("info", help="Inspect a specific customization or plugin in detail.")
@@ -74,6 +110,7 @@ def main() -> None:
     sub_toggle = subparsers.add_parser("toggle", help="Toggle a plugin or cherry-pick individual subcomponents.")
     sub_toggle.add_argument("name", help="Plugin name or customization name.")
     sub_toggle.add_argument("--sub", "--component", dest="component", default=None, help="Specific subcomponent to toggle.")
+    sub_toggle.add_argument("-g", "--global", dest="is_global", action="store_true", help="Target global scope.")
 
     # search subcommand
     sub_search = subparsers.add_parser("search", help="Search the curated agent skill marketplace.")
@@ -99,6 +136,8 @@ def main() -> None:
         choices=["toggle", "enable", "disable"],
         help="Action to perform (default: toggle).",
     )
+    sub_plugin.add_argument("-g", "--global", dest="is_global", action="store_true", help="Global scope.")
+    sub_plugin.add_argument("-w", "--workspace", dest="is_workspace", action="store_true", help="Workspace scope.")
 
     # mcp subcommand
     sub_mcp = subparsers.add_parser("mcp", help="List or inspect Antigravity MCP servers.")
@@ -114,13 +153,21 @@ def main() -> None:
     elif args.command == "install":
         scope = Scope.GLOBAL if args.is_global else Scope.WORKSPACE
         sys.exit(run_install(args.pack, scope, registry.workspace_root, registry.home_dir))
+    elif args.command in ("enable", "disable"):
+        i_type = "plugin" if args.plugin else ("skill" if args.skill else ("agent" if args.agent else None))
+        scope = Scope.GLOBAL if getattr(args, "is_global", False) else Scope.WORKSPACE
+        sys.exit(toggle_customization_cli(registry, args.name, action=args.command, item_type=i_type, scope=scope))
     elif args.command == "plugin":
-        sys.exit(manage_plugin_cli(registry, args.name, args.action))
+        scope = Scope.WORKSPACE if getattr(args, "is_workspace", False) else Scope.GLOBAL
+        sys.exit(manage_plugin_cli(registry, args.name, args.action, scope=scope))
     elif args.command == "toggle":
         if args.component:
             sys.exit(toggle_plugin_component_cli(registry, args.name, args.component))
         else:
-            sys.exit(manage_plugin_cli(registry, args.name, "toggle"))
+            scope = Scope.GLOBAL if getattr(args, "is_global", False) else Scope.WORKSPACE
+            sys.exit(manage_plugin_cli(registry, args.name, "toggle", scope=scope))
+    elif args.command == "status" or args.status:
+        print_status(registry)
     elif args.command == "tokens" or args.tokens:
         print_tokens(registry)
     elif args.command == "mcp":
@@ -139,7 +186,12 @@ def main() -> None:
         target = args.name if args.command in ("info", "inspect") else args.info
         print_info(registry, target)
     elif args.command == "list" or args.list:
-        print_list(registry)
+        filter_sc = None
+        if getattr(args, "is_global", False):
+            filter_sc = Scope.GLOBAL
+        elif getattr(args, "is_workspace", False):
+            filter_sc = Scope.WORKSPACE
+        print_list(registry, filter_scope=filter_sc)
     else:
         app = SkillManagerTUI(registry)
         app.run()

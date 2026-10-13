@@ -249,18 +249,23 @@ def search_catalog(query: str = "") -> List[CatalogSkillPack]:
 def check_installed_status(workspace_root: Path, home_dir: Optional[Path] = None) -> None:
     """Update is_installed and install_path attributes against workspace and global configs."""
     home = home_dir or Path.home()
-    ws_skills = workspace_root / ".agents" / "skills"
+    ws_gemini_skills = workspace_root / ".gemini" / "skills"
+    ws_legacy_skills = workspace_root / ".agents" / "skills"
     gl_skills = home / ".gemini" / "config" / "skills"
     gl_plugins = home / ".gemini" / "config" / "plugins"
 
     for pack in CURATED_CATALOG:
-        ws_path = ws_skills / pack.name
+        ws_path = ws_gemini_skills / pack.name
+        ws_legacy_path = ws_legacy_skills / pack.name
         gl_path = gl_skills / pack.name
         pl_path = gl_plugins / pack.name
 
         if ws_path.is_dir() and (ws_path / "SKILL.md").exists():
             pack.is_installed = True
             pack.install_path = ws_path
+        elif ws_legacy_path.is_dir() and (ws_legacy_path / "SKILL.md").exists():
+            pack.is_installed = True
+            pack.install_path = ws_legacy_path
         elif gl_path.is_dir() and (gl_path / "SKILL.md").exists():
             pack.is_installed = True
             pack.install_path = gl_path

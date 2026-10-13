@@ -42,7 +42,7 @@ class TestCatalog(unittest.TestCase):
         self.assertEqual(len(no_results), 0)
 
     def test_install_catalog_pack(self):
-        target_dir = self.workspace_root / ".agents" / "skills"
+        target_dir = self.workspace_root / ".gemini" / "skills"
         target_dir.mkdir(parents=True)
 
         success, msg = install_catalog_pack("superpowers", target_dir, "workspace")
@@ -60,7 +60,7 @@ class TestCatalog(unittest.TestCase):
         self.assertEqual(skill.name, "superpowers")
 
     def test_check_installed_status(self):
-        target_dir = self.workspace_root / ".agents" / "skills"
+        target_dir = self.workspace_root / ".gemini" / "skills"
         target_dir.mkdir(parents=True)
 
         # Before installation
@@ -74,7 +74,7 @@ class TestCatalog(unittest.TestCase):
         self.assertEqual(pack.install_path, target_dir / "superpowers")
 
     def test_install_unknown_pack(self):
-        target_dir = self.workspace_root / ".agents" / "skills"
+        target_dir = self.workspace_root / ".gemini" / "skills"
         success, msg = install_catalog_pack("totally-invalid-pack-name", target_dir, "workspace")
         self.assertFalse(success)
         self.assertIn("Unknown skill pack", msg)

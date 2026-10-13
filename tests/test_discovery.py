@@ -165,6 +165,121 @@ class TestDiscovery(unittest.TestCase):
             saved_cfg = json.loads(config_file.read_text(encoding="utf-8"))
             self.assertTrue(saved_cfg["plugins"]["test-plug"]["enabled"])
 
+    def test_standalone_subagent_discovery_and_disabled_toggling(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            agents_dir = home / ".gemini" / "config" / "agents"
+            agents_dir.mkdir(parents=True)
+
+            # Active agent
+            (agents_dir / "product-architect.md").write_text(
+                "---\nname: product-architect\nrole: Product Architect\ndescription: Spec author\n---\nPrompt",
+                encoding="utf-8",
+            )
+
+            # Disabled agent inside .disabled
+            dis_dir = agents_dir / ".disabled"
+            dis_dir.mkdir()
+            (dis_dir / "code-reviewer.md").write_text(
+                "---\nname: code-reviewer\nrole: Staff Code Reviewer\ndescription: Reviewer\n---\nPrompt",
+                encoding="utf-8",
+            )
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            active_sub = next((s for s in registry.subagents if s.name == "product-architect"), None)
+            disabled_sub = next((s for s in registry.subagents if s.name == "code-reviewer"), None)
+
+            self.assertIsNotNone(active_sub)
+            self.assertTrue(active_sub.is_active)
+            self.assertEqual(active_sub.tier, "GLOBAL")
+
+            self.assertIsNotNone(disabled_sub)
+            self.assertFalse(disabled_sub.is_active)
+
+            # Test toggling active_sub off -> moves to .disabled/
+            registry.toggle_item(active_sub)
+            self.assertFalse(active_sub.is_active)
+            self.assertTrue((dis_dir / "product-architect.md").is_file())
+            self.assertFalse((agents_dir / "product-architect.md").is_file())
+
+            # Test toggling disabled_sub on -> moves out of .disabled/
+            registry.toggle_item(disabled_sub)
+            self.assertTrue(disabled_sub.is_active)
+            self.assertTrue((agents_dir / "code-reviewer.md").is_file())
+            self.assertFalse((dis_dir / "code-reviewer.md").is_file())
+
+    def test_workspace_plugin_isolation_and_exclusion(self):
+        import json
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            # Global plugin
+            plugin_dir = home / ".gemini" / "config" / "plugins" / "flutter"
+            plugin_dir.mkdir(parents=True)
+            (plugin_dir / "plugin.json").write_text(
+                '{"name": "flutter", "version": "1.0.0", "description": "Flutter SDK"}',
+                encoding="utf-8",
+            )
+
+            # Workspace excludes flutter via plugins.json
+            ws_gemini = root / ".gemini"
+            ws_gemini.mkdir()
+            ws_plugins_json = ws_gemini / "plugins.json"
+            ws_plugins_json.write_text(
+                json.dumps({
+                    "inherits": [
+                        {
+                            "path": "~/.gemini/config/plugins.json",
+                            "exclude": ["flutter"],
+                        }
+                    ]
+                }),
+                encoding="utf-8",
+            )
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            plug = next((p for p in registry.plugins if p.name == "flutter"), None)
+            self.assertIsNotNone(plug)
+            # Workspace exclusion should mark plugin as inactive
+            self.assertFalse(plug.is_active)
+
+    def test_zero_touch_personal_vault_invariant(self):
+        """Verify that under no circumstances does agy-skills write into ~/.agents."""
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            # Create private git vault ~/.agents/
+            personal_vault = home / ".agents"
+            personal_vault.mkdir()
+            (personal_vault / "secret-prompt.md").write_text("Confidential", encoding="utf-8")
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            # Run installs, toggles, discovery
+            from agy_skills.cli import run_install
+            from agy_skills.models import Scope
+            run_install("superpowers", Scope.WORKSPACE, root, home)
+            run_install("graphify", Scope.GLOBAL, root, home)
+
+            # Personal vault must remain completely untouched
+            self.assertEqual(list(personal_vault.iterdir()), [personal_vault / "secret-prompt.md"])
+            self.assertFalse((personal_vault / "skills").exists())
+
 
 if __name__ == "__main__":
     unittest.main()

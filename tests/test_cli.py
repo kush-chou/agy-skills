@@ -93,6 +93,55 @@ class TestCLI(unittest.TestCase):
         self.assertIn("sub-tool-1", info_out)
         self.assertIn("748", info_out)
 
+    def test_cli_status_and_scope_install(self):
+        from agy_skills.cli import print_status, run_install, toggle_customization_cli
+        from agy_skills.models import Scope
+
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+
+            # Test print_status
+            captured = io.StringIO()
+            sys.stdout = captured
+            try:
+                print_status(registry)
+            finally:
+                sys.stdout = sys.__stdout__
+
+            status_out = captured.getvalue()
+            self.assertIn("Antigravity Engine & Customizations Diagnostic", status_out)
+            self.assertIn("Zero-Touch Invariant", status_out)
+            self.assertIn("20,000 tokens", status_out)
+
+            # Test run_install workspace target: must be root / .gemini / skills
+            code = run_install("superpowers", Scope.WORKSPACE, root, home)
+            self.assertEqual(code, 0)
+            ws_dest = root / ".gemini" / "skills" / "superpowers"
+            self.assertTrue(ws_dest.is_dir())
+            self.assertTrue((ws_dest / "SKILL.md").is_file())
+
+            # Verify home / .agents / skills was NEVER touched
+            self.assertFalse((home / ".agents").exists())
+
+            # Test run_install global target: must be home / .gemini / config / skills
+            code_gl = run_install("graphify", Scope.GLOBAL, root, home)
+            self.assertEqual(code_gl, 0)
+            gl_dest = home / ".gemini" / "config" / "skills" / "graphify"
+            self.assertTrue(gl_dest.is_dir())
+            self.assertTrue((gl_dest / "SKILL.md").is_file())
+
+            # Test enable and disable CLI
+            registry.discover_all()
+            dis_code = toggle_customization_cli(registry, "superpowers", action="disable", item_type="skill", scope=Scope.WORKSPACE)
+            self.assertEqual(dis_code, 0)
+            en_code = toggle_customization_cli(registry, "superpowers", action="enable", item_type="skill", scope=Scope.WORKSPACE)
+            self.assertEqual(en_code, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -112,15 +112,21 @@ class SkillManagerTUI:
 
         elif tab == "subagents":
             bi_subs = [s for s in self.subagents if s.scope == Scope.BUILTIN and match_filter(s)]
+            gl_subs = [s for s in self.subagents if s.scope == Scope.GLOBAL and s.tier == "GLOBAL" and s.is_active and match_filter(s)]
             pl_subs = [s for s in self.subagents if s.tier == "PLUGIN" and match_filter(s)]
-            ws_subs = [s for s in self.subagents if s.scope == Scope.WORKSPACE and match_filter(s)]
+            ws_subs = [s for s in self.subagents if s.scope == Scope.WORKSPACE and s.is_active and match_filter(s)]
+            dis_subs = [s for s in self.subagents if not s.is_active and match_filter(s)]
             sections = []
             if bi_subs:
                 sections.append((f"BUILT-IN ({len(bi_subs)})", bi_subs))
+            if gl_subs:
+                sections.append((f"GLOBAL ACTIVE ({len(gl_subs)})", gl_subs))
             if pl_subs:
                 sections.append((f"PLUGINS / EXTENSIONS ({len(pl_subs)})", pl_subs))
             if ws_subs:
                 sections.append((f"WORKSPACE ({len(ws_subs)})", ws_subs))
+            if dis_subs:
+                sections.append((f"DISABLED ({len(dis_subs)})", dis_subs))
             return sections
 
         elif tab == "plugins":
