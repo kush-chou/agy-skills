@@ -28,7 +28,50 @@ class TestDiscovery(unittest.TestCase):
         sub = home / "some_random_sub_test_dir_12345"
         # Since sub doesn't have .git, walking up reaches home which is skipped
         res = find_workspace_root(home)
-        self.assertEqual(res, home)
+        self.assertIsNone(res)
+
+    def test_discover_subagents(self):
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            root = Path(tmp_dir)
+            (root / ".git").mkdir()
+            home = root / "fake_home"
+            home.mkdir()
+
+            # Global subagent
+            g_agent = home / ".gemini" / "config" / "agents" / "global-agent.md"
+            g_agent.parent.mkdir(parents=True, exist_ok=True)
+            g_agent.write_text(
+                "---\nname: global-agent\ndescription: Global assistant agent.\ntools: [read_file]\n---\nSystem prompt here.",
+                encoding="utf-8",
+            )
+
+            # Workspace subagent
+            w_agent = root / ".agents" / "agents" / "local-agent.md"
+            w_agent.parent.mkdir(parents=True, exist_ok=True)
+            w_agent.write_text(
+                "---\nname: local-agent\ndescription: Workspace local agent.\ntools: [run_command]\n---\nLocal system prompt.",
+                encoding="utf-8",
+            )
+
+            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+            registry.discover_all()
+
+            self.assertEqual(len(registry.subagents), 2)
+            names = {a.name for a in registry.subagents}
+            self.assertEqual(names, {"global-agent", "local-agent"})
+
+            # Toggle workspace agent
+            local_a = registry.find_item("local-agent")
+            self.assertIsNotNone(local_a)
+            self.assertTrue(local_a.is_active)
+            registry.toggle_item(local_a)
+            self.assertFalse(local_a.is_active)
+            self.assertTrue((root / ".agents" / "agents" / ".disabled" / "local-agent.md").is_file())
+
+            # Toggle back
+            registry.toggle_item(local_a)
+            self.assertTrue(local_a.is_active)
+            self.assertTrue(w_agent.is_file())
 
     def test_discover_workspace_items(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

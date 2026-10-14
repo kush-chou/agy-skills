@@ -151,13 +151,38 @@ def set_rule_enabled(config: Dict[str, Any], name: str, enabled: bool) -> None:
         rules[name] = {"enabled": enabled}
 
 
+def is_subagent_enabled(config: Dict[str, Any], name: str, default: bool = True) -> bool:
+    """Return whether a subagent is enabled in the configuration."""
+    subagents = config.get("subagents", {})
+    if isinstance(subagents, dict) and name in subagents:
+        entry = subagents[name]
+        if isinstance(entry, dict) and "enabled" in entry:
+            return bool(entry["enabled"])
+    return default
+
+
+def set_subagent_enabled(config: Dict[str, Any], name: str, enabled: bool) -> None:
+    """Update enabled state for a subagent in configuration dictionary."""
+    subagents = config.setdefault("subagents", {})
+    if not isinstance(subagents, dict):
+        subagents = {}
+        config["subagents"] = subagents
+
+    if name in subagents and isinstance(subagents[name], dict):
+        subagents[name]["enabled"] = enabled
+    else:
+        subagents[name] = {"enabled": enabled}
+
+
 def load_config_for_scope(
     scope: Scope,
-    workspace_root: Path,
+    workspace_root: Optional[Path],
     home_dir: Optional[Path] = None,
-) -> Tuple[Path, Dict[str, Any]]:
+) -> Tuple[Optional[Path], Dict[str, Any]]:
     """Load the appropriate config.json path and data for a given scope."""
     if scope == Scope.WORKSPACE:
+        if workspace_root is None:
+            return None, {}
         cfg_path = get_workspace_config_path(workspace_root)
     else:
         cfg_path = get_global_config_path(home_dir)
@@ -169,14 +194,17 @@ def load_config_for_scope(
 def save_config_for_scope(
     scope: Scope,
     data: Dict[str, Any],
-    workspace_root: Path,
+    workspace_root: Optional[Path],
     home_dir: Optional[Path] = None,
 ) -> Path:
     """Save configuration data to the target file for a given scope."""
     if scope == Scope.WORKSPACE:
+        if workspace_root is None:
+            raise ValueError("Cannot save workspace configuration: no active workspace.")
         cfg_path = get_workspace_config_path(workspace_root)
     else:
         cfg_path = get_global_config_path(home_dir)
 
     write_config(cfg_path, data)
     return cfg_path
+

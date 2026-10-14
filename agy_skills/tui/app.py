@@ -10,16 +10,17 @@ import textwrap
 from typing import Any, List, Optional, Tuple, Union
 
 from ..discovery import CustomizationRegistry
-from ..models import Rule, Scope, Skill
+from ..models import Rule, Scope, Skill, Subagent
 
 
 class SkillManagerTUI:
-    """Lean 2-pane TUI for managing Antigravity skills and rules with real-time budget meter."""
+    """Lean 2-pane TUI for managing Antigravity skills, rules, and subagents with real-time budget meter."""
 
     def __init__(self, registry: CustomizationRegistry):
         self.registry = registry
         self.skills: List[Skill] = []
         self.rules: List[Rule] = []
+        self.subagents: List[Subagent] = []
 
         self.selected_index: int = 0
         self.scroll_offset: int = 0
@@ -35,8 +36,9 @@ class SkillManagerTUI:
         self.status_message: str = ""
 
     def refresh_data(self) -> None:
-        """Reload skills and rules from filesystem and configuration."""
+        """Reload skills, rules, and subagents from filesystem and configuration."""
         self.skills, self.rules = self.registry.discover_all()
+        self.subagents = self.registry.subagents
 
     @property
     def target_scope(self) -> Scope:
@@ -81,11 +83,11 @@ class SkillManagerTUI:
         except Exception:
             pass
 
-    def get_current_items_grouped(self) -> List[Tuple[str, List[Union[Skill, Rule]]]]:
-        """Return categorized sections of skills and rules according to active scope and filter."""
+    def get_current_items_grouped(self) -> List[Tuple[str, List[Union[Skill, Rule, Subagent]]]]:
+        """Return categorized sections of skills, rules, and subagents according to active scope and filter."""
         query = self.filter_text.strip().lower()
 
-        def match_filter(item: Union[Skill, Rule]) -> bool:
+        def match_filter(item: Union[Skill, Rule, Subagent]) -> bool:
             if not query:
                 return True
             name = item.name.lower()
@@ -94,33 +96,39 @@ class SkillManagerTUI:
 
         ws_skills = [s for s in self.skills if s.scope == Scope.WORKSPACE and match_filter(s)]
         ws_rules = [r for r in self.rules if r.scope == Scope.WORKSPACE and match_filter(r)]
+        ws_subagents = [a for a in self.subagents if a.scope == Scope.WORKSPACE and match_filter(a)]
         gl_skills = [s for s in self.skills if s.scope == Scope.GLOBAL and match_filter(s)]
         gl_rules = [r for r in self.rules if r.scope == Scope.GLOBAL and match_filter(r)]
+        gl_subagents = [a for a in self.subagents if a.scope == Scope.GLOBAL and match_filter(a)]
 
-        sections: List[Tuple[str, List[Union[Skill, Rule]]]] = []
+        sections: List[Tuple[str, List[Union[Skill, Rule, Subagent]]]] = []
         if self.scope_filter in ("ALL", "WORKSPACE"):
             if ws_skills:
                 sections.append((f"WORKSPACE SKILLS ({len(ws_skills)})", ws_skills))
             if ws_rules:
                 sections.append((f"WORKSPACE RULES ({len(ws_rules)})", ws_rules))
+            if ws_subagents:
+                sections.append((f"WORKSPACE SUBAGENTS ({len(ws_subagents)})", ws_subagents))
 
         if self.scope_filter in ("ALL", "GLOBAL"):
             if gl_skills:
                 sections.append((f"GLOBAL SKILLS ({len(gl_skills)})", gl_skills))
             if gl_rules:
                 sections.append((f"GLOBAL RULES ({len(gl_rules)})", gl_rules))
+            if gl_subagents:
+                sections.append((f"GLOBAL SUBAGENTS ({len(gl_subagents)})", gl_subagents))
 
         return sections
 
-    def get_flattened_selectable_items(self) -> List[Union[Skill, Rule]]:
+    def get_flattened_selectable_items(self) -> List[Union[Skill, Rule, Subagent]]:
         """Return flat list of all currently visible items across groups."""
-        items: List[Union[Skill, Rule]] = []
+        items: List[Union[Skill, Rule, Subagent]] = []
         for _, group_items in self.get_current_items_grouped():
             items.extend(group_items)
         return items
 
     @property
-    def selected_item(self) -> Optional[Union[Skill, Rule]]:
+    def selected_item(self) -> Optional[Union[Skill, Rule, Subagent]]:
         items = self.get_flattened_selectable_items()
         if not items:
             return None
@@ -243,10 +251,10 @@ class SkillManagerTUI:
         flat_idx = 0
 
         if not flat_items:
-            self._safe_addstr(stdscr, top_y + 1, 2, "(No matching skills or rules)", self._color(5, curses.A_DIM))
+            self._safe_addstr(stdscr, top_y + 1, 2, "(No matching skills, rules, or subagents)", self._color(5, curses.A_DIM))
         else:
             # Build list rows with group headers
-            display_rows: List[Tuple[bool, str, Optional[Union[Skill, Rule]], int]] = []
+            display_rows: List[Tuple[bool, str, Optional[Union[Skill, Rule, Subagent]], int]] = []
             for title, items in grouped:
                 display_rows.append((True, title, None, -1))
                 for itm in items:
@@ -300,12 +308,18 @@ class SkillManagerTUI:
         inspect_w = right_w - 3
 
         if sel is None:
-            self._safe_addstr(stdscr, top_y + 1, inspect_x, "Select a skill or rule from the list to inspect.", self._color(5, curses.A_DIM))
+            self._safe_addstr(stdscr, top_y + 1, inspect_x, "Select a skill, rule, or subagent from the list to inspect.", self._color(5, curses.A_DIM))
             return
 
         # Header card
         card_y = top_y
-        kind = "SKILL" if isinstance(sel, Skill) else "RULE"
+        if isinstance(sel, Skill):
+            kind = "SKILL"
+        elif isinstance(sel, Subagent):
+            kind = "SUBAGENT"
+        else:
+            kind = "RULE"
+
         status_text = "Active" if sel.is_active else "Disabled"
         if sel.is_overridden:
             status_text += " (Overridden by workspace)"
@@ -322,6 +336,9 @@ class SkillManagerTUI:
         if isinstance(sel, Rule):
             size_str = f"Size: {sel.size_bytes:,} B ({sel.size_bytes / 1024:.1f} KB)"
             self._safe_addstr(stdscr, card_y, inspect_x, f"{tok_str:<24} {size_str}", self._color(5))
+        elif isinstance(sel, Subagent):
+            model_str = f"Model: {sel.model}"
+            self._safe_addstr(stdscr, card_y, inspect_x, f"{tok_str:<24} {model_str}", self._color(5))
         else:
             self._safe_addstr(stdscr, card_y, inspect_x, tok_str, self._color(5))
         card_y += 1
@@ -345,6 +362,12 @@ class SkillManagerTUI:
             content_to_render = f"### Description\n{sel.description}\n\n"
             if sel.body:
                 content_to_render += f"### Documentation\n{sel.body}"
+        elif isinstance(sel, Subagent):
+            content_to_render = f"### Description\n{sel.description}\n\n"
+            if sel.tools:
+                content_to_render += "### Tools\n" + "\n".join(f"- `{t}`" for t in sel.tools) + "\n\n"
+            if sel.body:
+                content_to_render += f"### Instructions\n{sel.body}"
         else:
             content_to_render = sel.raw_content
 

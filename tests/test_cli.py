@@ -36,6 +36,14 @@ class TestCLI(unittest.TestCase):
         # Create workspace rule
         (self.root / "GEMINI.md").write_text("# Style Guide\nWrite clean tests.", encoding="utf-8")
 
+        # Create workspace subagent
+        a_dir = self.root / ".agents" / "agents"
+        a_dir.mkdir(parents=True)
+        (a_dir / "sample-agent.md").write_text(
+            "---\nname: sample-agent\ndescription: A valid sample agent.\ntools: [run_command]\n---\nSystem instructions.",
+            encoding="utf-8",
+        )
+
         self.home = self.root / "fake_home"
         self.home.mkdir()
 
@@ -56,6 +64,7 @@ class TestCLI(unittest.TestCase):
         self.assertEqual(exit_code, 0)
         self.assertIn("sample-skill", out)
         self.assertIn("GEMINI.md", out)
+        self.assertIn("sample-agent", out)
 
         # JSON mode
         captured_json = io.StringIO()
@@ -69,7 +78,9 @@ class TestCLI(unittest.TestCase):
         data = json.loads(captured_json.getvalue())
         self.assertIn("skills", data)
         self.assertIn("rules", data)
+        self.assertIn("subagents", data)
         self.assertEqual(data["skills"][0]["name"], "sample-skill")
+        self.assertEqual(data["subagents"][0]["name"], "sample-agent")
 
     def test_cli_status_text_and_json(self):
         captured = io.StringIO()
@@ -96,25 +107,41 @@ class TestCLI(unittest.TestCase):
         data = json.loads(captured_json.getvalue())
         self.assertEqual(data["token_budget"], 20000)
         self.assertIn("counts", data)
+        self.assertEqual(data["counts"]["subagents_active"], 1)
+        self.assertEqual(data["counts"]["subagents_disabled"], 0)
         self.assertIn("compliance", data)
 
     def test_cli_enable_and_disable(self):
         captured = io.StringIO()
         sys.stdout = captured
         try:
-            # Disable
+            # Disable skill
             ret_dis = cli_disable(self.registry, "sample-skill")
             self.assertEqual(ret_dis, 0)
             self.registry.discover_all()
             skill = self.registry.find_item("sample-skill")
             self.assertFalse(skill.is_active)
 
-            # Re-enable
+            # Re-enable skill
             ret_en = cli_enable(self.registry, "sample-skill")
             self.assertEqual(ret_en, 0)
             self.registry.discover_all()
             skill = self.registry.find_item("sample-skill")
             self.assertTrue(skill.is_active)
+
+            # Disable subagent
+            ret_dis_a = cli_disable(self.registry, "sample-agent")
+            self.assertEqual(ret_dis_a, 0)
+            self.registry.discover_all()
+            agent = self.registry.find_item("sample-agent")
+            self.assertFalse(agent.is_active)
+
+            # Re-enable subagent
+            ret_en_a = cli_enable(self.registry, "sample-agent")
+            self.assertEqual(ret_en_a, 0)
+            self.registry.discover_all()
+            agent = self.registry.find_item("sample-agent")
+            self.assertTrue(agent.is_active)
         finally:
             sys.stdout = sys.__stdout__
 
@@ -122,27 +149,28 @@ class TestCLI(unittest.TestCase):
         captured = io.StringIO()
         sys.stdout = captured
         try:
-            exit_code = cli_info(self.registry, "sample-skill")
+            exit_code = cli_info(self.registry, "sample-agent")
         finally:
             sys.stdout = sys.__stdout__
 
         self.assertEqual(exit_code, 0)
         out = captured.getvalue()
-        self.assertIn("sample-skill", out)
+        self.assertIn("sample-agent", out)
         self.assertIn("WORKSPACE", out)
 
         # JSON mode
         captured_json = io.StringIO()
         sys.stdout = captured_json
         try:
-            exit_json = cli_info(self.registry, "sample-skill", as_json=True)
+            exit_json = cli_info(self.registry, "sample-agent", as_json=True)
         finally:
             sys.stdout = sys.__stdout__
 
         self.assertEqual(exit_json, 0)
         data = json.loads(captured_json.getvalue())
-        self.assertEqual(data["name"], "sample-skill")
+        self.assertEqual(data["name"], "sample-agent")
         self.assertEqual(data["scope"], "workspace")
+        self.assertEqual(data["type"], "subagent")
 
     def test_cli_lint(self):
         captured = io.StringIO()

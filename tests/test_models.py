@@ -9,6 +9,7 @@ from agy_skills.models import (
     Rule,
     Scope,
     Skill,
+    Subagent,
     parse_frontmatter,
 )
 
@@ -76,6 +77,24 @@ Details.
             self.assertEqual(rule.scope, Scope.GLOBAL)
             self.assertGreater(rule.size_bytes, 0)
             self.assertIn("Must write tests.", rule.raw_content)
+        finally:
+            tf_path.unlink()
+
+    def test_subagent_from_file(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".md", delete=False) as tf:
+            tf.write("---\nname: test-bot\ndescription: A bot for testing models.\ntools: [run_command, read_file]\nmodel: inherit\n---\nSystem instructions here.")
+            tf_path = Path(tf.name)
+
+        try:
+            agent = Subagent.from_file(tf_path, Scope.WORKSPACE)
+            self.assertIsNotNone(agent)
+            self.assertEqual(agent.name, "test-bot")
+            self.assertEqual(agent.description, "A bot for testing models.")
+            self.assertEqual(agent.tools, ["run_command", "read_file"])
+            self.assertEqual(agent.model, "inherit")
+            self.assertEqual(agent.scope, Scope.WORKSPACE)
+            self.assertEqual(agent.entity_type, EntityType.SUBAGENT)
+            self.assertIn("System instructions here.", agent.raw_content)
         finally:
             tf_path.unlink()
 

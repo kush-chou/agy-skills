@@ -11,11 +11,13 @@ from agy_skills.state import (
     get_workspace_config_path,
     is_rule_enabled,
     is_skill_enabled,
+    is_subagent_enabled,
     load_config_for_scope,
     read_config,
     save_config_for_scope,
     set_rule_enabled,
     set_skill_enabled,
+    set_subagent_enabled,
     write_config,
 )
 
@@ -78,21 +80,27 @@ class TestState(unittest.TestCase):
         # Default is True
         self.assertTrue(is_skill_enabled(config, "sample-skill"))
         self.assertTrue(is_rule_enabled(config, "GEMINI.md"))
+        self.assertTrue(is_subagent_enabled(config, "tester-agent"))
 
         # Disable
         set_skill_enabled(config, "sample-skill", False)
         set_rule_enabled(config, "GEMINI.md", False)
+        set_subagent_enabled(config, "tester-agent", False)
 
         self.assertFalse(is_skill_enabled(config, "sample-skill"))
         self.assertFalse(is_rule_enabled(config, "GEMINI.md"))
+        self.assertFalse(is_subagent_enabled(config, "tester-agent"))
         self.assertEqual(config["skills"]["sample-skill"]["enabled"], False)
         self.assertEqual(config["rules"]["GEMINI.md"]["enabled"], False)
+        self.assertEqual(config["subagents"]["tester-agent"]["enabled"], False)
 
         # Re-enable
         set_skill_enabled(config, "sample-skill", True)
         set_rule_enabled(config, "GEMINI.md", True)
+        set_subagent_enabled(config, "tester-agent", True)
         self.assertTrue(is_skill_enabled(config, "sample-skill"))
         self.assertTrue(is_rule_enabled(config, "GEMINI.md"))
+        self.assertTrue(is_subagent_enabled(config, "tester-agent"))
 
     def test_load_and_save_for_scope(self):
         with tempfile.TemporaryDirectory() as tmp_dir:

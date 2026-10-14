@@ -4,11 +4,12 @@ from pathlib import Path
 import tempfile
 import unittest
 
-from agy_skills.models import Rule, Scope, Skill
+from agy_skills.models import Rule, Scope, Skill, Subagent
 from agy_skills.validator import (
     MAX_RULE_SIZE_BYTES,
     validate_rule,
     validate_skill,
+    validate_subagent,
 )
 
 
@@ -83,6 +84,26 @@ class TestValidator(unittest.TestCase):
             errors = validate_rule(rule)
             self.assertFalse(rule.is_valid)
             self.assertTrue(any("24 KB" in e for e in errors))
+        finally:
+            tf_path.unlink()
+
+    def test_validate_subagent(self):
+        with tempfile.NamedTemporaryFile("w+", suffix=".md", delete=False) as tf:
+            tf.write("---\nname: my-agent\ndescription: A valid agent description for unit testing.\n---\nSystem prompt.")
+            tf_path = Path(tf.name)
+
+        try:
+            agent = Subagent.from_file(tf_path, Scope.WORKSPACE)
+            self.assertIsNotNone(agent)
+            errors = validate_subagent(agent)
+            self.assertEqual(errors, [])
+            self.assertTrue(agent.is_valid)
+
+            # Invalid agent (name not kebab-case)
+            agent.name = "My_Agent_Invalid"
+            errs = validate_subagent(agent)
+            self.assertFalse(agent.is_valid)
+            self.assertTrue(any("kebab-case" in e for e in errs))
         finally:
             tf_path.unlink()
 

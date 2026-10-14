@@ -15,6 +15,7 @@ class Scope(str, Enum):
 class EntityType(str, Enum):
     SKILL = "skill"
     RULE = "rule"
+    SUBAGENT = "subagent"
 
 
 @dataclass
@@ -89,6 +90,10 @@ class Skill:
     resources: List[Path] = field(default_factory=list)
     aliases: List[Path] = field(default_factory=list)
 
+    @property
+    def entity_type(self) -> EntityType:
+        return EntityType.SKILL
+
     @classmethod
     def from_directory(cls, dir_path: Path, scope: Scope) -> Optional["Skill"]:
         skill_file = dir_path / "SKILL.md"
@@ -139,6 +144,10 @@ class Rule:
     is_overridden: bool = False
     aliases: List[Path] = field(default_factory=list)
 
+    @property
+    def entity_type(self) -> EntityType:
+        return EntityType.RULE
+
     @classmethod
     def from_file(cls, file_path: Path, scope: Scope, name_override: Optional[str] = None) -> Optional["Rule"]:
         if not file_path.is_file():
@@ -172,3 +181,60 @@ class Rule:
             raw_content=content,
             description=desc,
         )
+
+
+@dataclass
+class Subagent:
+    name: str
+    description: str
+    path: Path
+    scope: Scope
+    tokens: int = 0
+    is_active: bool = True
+    is_valid: bool = True
+    validation_errors: List[str] = field(default_factory=list)
+    raw_content: str = ""
+    body: str = ""
+    is_overridden: bool = False
+    tools: List[str] = field(default_factory=list)
+    model: str = "inherit"
+    aliases: List[Path] = field(default_factory=list)
+
+    @property
+    def entity_type(self) -> EntityType:
+        return EntityType.SUBAGENT
+
+    @classmethod
+    def from_file(cls, file_path: Path, scope: Scope, name_override: Optional[str] = None) -> Optional["Subagent"]:
+        if not file_path.is_file():
+            return None
+
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        frontmatter, body = parse_frontmatter(content)
+        name = name_override or frontmatter.get("name", file_path.stem)
+        description = frontmatter.get("description", "")
+        tokens = estimate_tokens(content)
+
+        tools_raw = frontmatter.get("tools", "")
+        tools: List[str] = []
+        if tools_raw:
+            tools = re.findall(r"-\s*([a-zA-Z0-9_-]+)", tools_raw)
+            if not tools:
+                tools = [t.strip("[]'\" \t") for t in tools_raw.split(",") if t.strip("[]'\" \t")]
+
+        model = frontmatter.get("model", "inherit")
+        disabled_val = frontmatter.get("disabled", "").lower() in ("true", "1", "yes")
+
+        return cls(
+            name=name,
+            description=description,
+            path=file_path,
+            scope=scope,
+            tokens=tokens,
+            raw_content=content,
+            body=body,
+            is_active=not disabled_val,
+            tools=tools,
+            model=model,
+        )
+

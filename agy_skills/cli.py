@@ -6,7 +6,7 @@ import sys
 from typing import Any, Dict, List, Optional, Union
 
 from .discovery import CustomizationRegistry
-from .models import Rule, Scope, Skill
+from .models import Rule, Scope, Skill, Subagent
 
 
 def _render_bar(used: int, total: int, width: int = 20) -> str:
@@ -22,16 +22,18 @@ def cli_list(
     scope: Optional[Scope] = None,
     as_json: bool = False,
 ) -> int:
-    """List discovered skills and rules."""
+    """List discovered skills, rules, and subagents."""
     skills, rules = registry.discover_all()
+    subagents = registry.subagents
 
     if scope:
         skills = [s for s in skills if s.scope == scope]
         rules = [r for r in rules if r.scope == scope]
+        subagents = [a for a in subagents if a.scope == scope]
 
     if as_json:
         data = {
-            "workspace_root": str(registry.workspace_root),
+            "workspace_root": str(registry.workspace_root) if registry.workspace_root else None,
             "token_budget": registry.token_budget,
             "active_tokens": registry.get_total_active_tokens(),
             "skills": [
@@ -60,6 +62,21 @@ def cli_list(
                 }
                 for r in rules
             ],
+            "subagents": [
+                {
+                    "name": a.name,
+                    "scope": a.scope.value,
+                    "active": a.is_active,
+                    "tokens": a.tokens,
+                    "path": str(a.path),
+                    "valid": a.is_valid,
+                    "description": a.description,
+                    "tools": a.tools,
+                    "model": a.model,
+                    "is_overridden": a.is_overridden,
+                }
+                for a in subagents
+            ],
         }
         print(json.dumps(data, indent=2))
         return 0
@@ -68,7 +85,10 @@ def cli_list(
     budget = registry.token_budget
     pct = (active_tok / budget) * 100.0 if budget > 0 else 0.0
 
-    print(f"\n📂 Workspace Root: {registry.workspace_gemini_dir} \033[2m({registry.workspace_root})\033[0m")
+    if registry.workspace_root:
+        print(f"\n📂 Workspace Root: {registry.workspace_gemini_dir} \033[2m({registry.workspace_root})\033[0m")
+    else:
+        print("\n📂 Workspace Root: (None - Global Scope Only)")
     print(f"🏠 Global Config:   {registry.global_config_dir}")
     print(f"📊 Active Context:  {active_tok:,} / {budget:,} tokens ({pct:.1f}%)\n")
 
@@ -95,6 +115,18 @@ def cli_list(
             tok_str = f"~{r.tokens}t"
             print(f"  {act_badge} {r.name:<28} {scope_badge:<11} {tok_str:<6} {status:<20} ({size_kb})")
 
+    print(f"\n\033[1;36m=== Antigravity Subagents ({len(subagents)} found) ===\033[0m")
+    if not subagents:
+        print("  (None found)")
+    else:
+        for a in subagents:
+            status = "\033[32m✔ valid\033[0m" if a.is_valid else f"\033[31m✖ {len(a.validation_errors)} error(s)\033[0m"
+            act_badge = "\033[32m●\033[0m" if a.is_active else "\033[2m○\033[0m"
+            scope_badge = f"[{a.scope.value.upper()}]"
+            tok_str = f"~{a.tokens}t"
+            desc = a.description[:40] if a.description else "(No description)"
+            print(f"  {act_badge} {a.name:<28} {scope_badge:<11} {tok_str:<6} {status:<20} {desc}")
+
     print("")
     return 0
 
@@ -102,6 +134,7 @@ def cli_list(
 def cli_status(registry: CustomizationRegistry, as_json: bool = False) -> int:
     """Print context token gauge, active vs disabled count, and compliance audit."""
     skills, rules = registry.discover_all()
+    subagents = registry.subagents
     active_tok = registry.get_total_active_tokens()
     budget = registry.token_budget
     pct = (active_tok / budget) * 100.0 if budget > 0 else 0.0
@@ -110,9 +143,12 @@ def cli_status(registry: CustomizationRegistry, as_json: bool = False) -> int:
     disabled_skills = [s for s in skills if not s.is_active]
     active_rules = [r for r in rules if r.is_active]
     disabled_rules = [r for r in rules if not r.is_active]
+    active_subagents = [a for a in subagents if a.is_active]
+    disabled_subagents = [a for a in subagents if not a.is_active]
 
     invalid_skills = [s for s in skills if not s.is_valid]
     invalid_rules = [r for r in rules if not r.is_valid]
+    invalid_subagents = [a for a in subagents if not a.is_valid]
 
     if as_json:
         data = {
@@ -125,11 +161,14 @@ def cli_status(registry: CustomizationRegistry, as_json: bool = False) -> int:
                 "skills_disabled": len(disabled_skills),
                 "rules_active": len(active_rules),
                 "rules_disabled": len(disabled_rules),
+                "subagents_active": len(active_subagents),
+                "subagents_disabled": len(disabled_subagents),
             },
             "compliance": {
-                "all_valid": (len(invalid_skills) == 0 and len(invalid_rules) == 0),
+                "all_valid": (len(invalid_skills) == 0 and len(invalid_rules) == 0 and len(invalid_subagents) == 0),
                 "invalid_skills": [s.name for s in invalid_skills],
                 "invalid_rules": [r.name for r in invalid_rules],
+                "invalid_subagents": [a.name for a in invalid_subagents],
             },
         }
         print(json.dumps(data, indent=2))
@@ -143,17 +182,20 @@ def cli_status(registry: CustomizationRegistry, as_json: bool = False) -> int:
     print(f"Remaining:     {max(0, budget - active_tok):,} tokens free\n")
 
     print("Components:")
-    print(f"  Skills: {len(active_skills)} active, {len(disabled_skills)} disabled ({len(skills)} total)")
-    print(f"  Rules:  {len(active_rules)} active, {len(disabled_rules)} disabled ({len(rules)} total)\n")
+    print(f"  Skills:    {len(active_skills)} active, {len(disabled_skills)} disabled ({len(skills)} total)")
+    print(f"  Rules:     {len(active_rules)} active, {len(disabled_rules)} disabled ({len(rules)} total)")
+    print(f"  Subagents: {len(active_subagents)} active, {len(disabled_subagents)} disabled ({len(subagents)} total)\n")
 
     print("Compliance Audit:")
-    if not invalid_skills and not invalid_rules:
-        print("  ✔ All skills and rules adhere to Antigravity standards.")
+    if not invalid_skills and not invalid_rules and not invalid_subagents:
+        print("  ✔ All skills, rules, and subagents adhere to Antigravity standards.")
     else:
         if invalid_skills:
             print(f"  ✖ {len(invalid_skills)} invalid skill(s): {', '.join(s.name for s in invalid_skills)}")
         if invalid_rules:
             print(f"  ✖ {len(invalid_rules)} invalid rule(s): {', '.join(r.name for r in invalid_rules)}")
+        if invalid_subagents:
+            print(f"  ✖ {len(invalid_subagents)} invalid subagent(s): {', '.join(a.name for a in invalid_subagents)}")
     print("")
     return 0
 
@@ -163,7 +205,7 @@ def cli_enable(
     name: str,
     scope: Optional[Scope] = None,
 ) -> int:
-    """Enable a skill or rule deterministically."""
+    """Enable a skill, rule, or subagent deterministically."""
     registry.discover_all()
     item = registry.find_item(name, scope=scope)
     if not item:
@@ -172,7 +214,12 @@ def cli_enable(
 
     try:
         registry.set_item_state(item, True)
-        item_kind = "Skill" if isinstance(item, Skill) else "Rule"
+        if isinstance(item, Skill):
+            item_kind = "Skill"
+        elif isinstance(item, Subagent):
+            item_kind = "Subagent"
+        else:
+            item_kind = "Rule"
         print(f"✔ {item_kind} '{item.name}' is now ENABLED in {item.scope.value} scope.")
         return 0
     except Exception as exc:
@@ -185,7 +232,7 @@ def cli_disable(
     name: str,
     scope: Optional[Scope] = None,
 ) -> int:
-    """Disable a skill or rule deterministically."""
+    """Disable a skill, rule, or subagent deterministically."""
     registry.discover_all()
     item = registry.find_item(name, scope=scope)
     if not item:
@@ -194,7 +241,12 @@ def cli_disable(
 
     try:
         registry.set_item_state(item, False)
-        item_kind = "Skill" if isinstance(item, Skill) else "Rule"
+        if isinstance(item, Skill):
+            item_kind = "Skill"
+        elif isinstance(item, Subagent):
+            item_kind = "Subagent"
+        else:
+            item_kind = "Rule"
         print(f"✔ {item_kind} '{item.name}' is now DISABLED in {item.scope.value} scope.")
         return 0
     except Exception as exc:
@@ -224,6 +276,21 @@ def cli_info(
                 "path": str(item.path),
                 "skill_file": str(item.skill_file),
                 "tokens": item.tokens,
+                "is_active": item.is_active,
+                "is_valid": item.is_valid,
+                "validation_errors": item.validation_errors,
+                "content": item.raw_content,
+            }
+        elif isinstance(item, Subagent):
+            data = {
+                "type": "subagent",
+                "name": item.name,
+                "scope": item.scope.value,
+                "description": item.description,
+                "path": str(item.path),
+                "tokens": item.tokens,
+                "tools": item.tools,
+                "model": item.model,
                 "is_active": item.is_active,
                 "is_valid": item.is_valid,
                 "validation_errors": item.validation_errors,
@@ -260,6 +327,22 @@ def cli_info(
         print(f"\nDescription:\n{item.description}")
         if item.body:
             print(f"\nContent Preview:\n{item.body[:500]}...")
+    elif isinstance(item, Subagent):
+        print(f"\n--- Subagent: {item.name} ---")
+        print(f"Scope:       {item.scope.value.upper()}")
+        print(f"Active:      {'Yes' if item.is_active else 'No'}")
+        print(f"Model:       {item.model}")
+        print(f"Tools:       {', '.join(item.tools) if item.tools else '(None)'}")
+        print(f"Tokens:      ~{item.tokens} tok")
+        print(f"Path:        {item.path}")
+        print(f"Valid:       {'✔ Yes' if item.is_valid else '✖ No'}")
+        if item.validation_errors:
+            print("Errors:")
+            for err in item.validation_errors:
+                print(f"  - {err}")
+        print(f"\nDescription:\n{item.description}")
+        if item.body:
+            print(f"\nInstructions Preview:\n{item.body[:500]}...")
     else:
         print(f"\n--- Rule: {item.name} ---")
         print(f"Scope:       {item.scope.value.upper()}")
@@ -279,8 +362,9 @@ def cli_info(
 
 
 def cli_lint(registry: CustomizationRegistry) -> int:
-    """Validate all skills and rules; exit 0 if all valid, exit 1 on failures."""
+    """Validate all skills, rules, and subagents; exit 0 if all valid, exit 1 on failures."""
     skills, rules = registry.discover_all()
+    subagents = registry.subagents
     has_errors = False
 
     print("\n🔍 Running Antigravity Validation Suite...\n")
@@ -306,6 +390,17 @@ def cli_lint(registry: CustomizationRegistry) -> int:
                 print(f"     - {err}")
     else:
         print(f"✔ All {len(rules)} rules are within the 24 KB Antigravity size budget.")
+
+    invalid_subagents = [a for a in subagents if not a.is_valid]
+    if invalid_subagents:
+        has_errors = True
+        print(f"\n❌ Found issues in {len(invalid_subagents)} subagent(s):")
+        for a in invalid_subagents:
+            print(f"   [{a.scope.value}] {a.name} ({a.path}):")
+            for err in a.validation_errors:
+                print(f"     - {err}")
+    else:
+        print(f"✔ All {len(subagents)} subagents adhere to Antigravity specifications.")
 
     print("")
     return 1 if has_errors else 0

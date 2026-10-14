@@ -3,7 +3,7 @@
 import re
 from typing import List
 
-from .models import Rule, Skill
+from .models import Rule, Skill, Subagent
 
 MAX_RULE_SIZE_BYTES = 24_576  # 24 KB (24 * 1024) Antigravity hard limit
 
@@ -55,3 +55,27 @@ def validate_rule(rule: Rule) -> List[str]:
     rule.validation_errors = errors
     rule.is_valid = len(errors) == 0 and rule.size_bytes <= MAX_RULE_SIZE_BYTES
     return errors
+
+
+def validate_subagent(subagent: Subagent) -> List[str]:
+    """Validate a Subagent according to Antigravity format specifications and frontmatter standards."""
+    errors: List[str] = []
+
+    # 1. Name format: lowercase-hyphenated (kebab-case)
+    if not subagent.name:
+        errors.append("Subagent missing 'name' in YAML frontmatter.")
+    elif not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", subagent.name):
+        errors.append(f"Subagent name '{subagent.name}' must be lowercase-hyphenated (kebab-case).")
+
+    # 2. Description checks
+    if not subagent.description or not subagent.description.strip():
+        errors.append("Subagent missing 'description' in YAML frontmatter.")
+
+    # 3. Path existence
+    if not subagent.path.is_file():
+        errors.append(f"Subagent file '{subagent.path}' does not exist.")
+
+    subagent.validation_errors = errors
+    subagent.is_valid = len(errors) == 0
+    return errors
+

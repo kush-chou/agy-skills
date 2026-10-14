@@ -27,6 +27,14 @@ class TestSkillManagerTUI(unittest.TestCase):
         # Workspace rule
         (self.root / "GEMINI.md").write_text("# Project Guidelines\nClean code.", encoding="utf-8")
 
+        # Workspace subagent
+        a_dir = self.root / ".agents" / "agents"
+        a_dir.mkdir(parents=True)
+        (a_dir / "demo-agent.md").write_text(
+            "---\nname: demo-agent\ndescription: A demo agent for testing TUI.\ntools: [read_file]\n---\nBody.",
+            encoding="utf-8",
+        )
+
         # Fake home dir
         self.home = self.root / "fake_home"
         self.home.mkdir()
@@ -47,12 +55,13 @@ class TestSkillManagerTUI(unittest.TestCase):
         grouped = self.tui.get_current_items_grouped()
         self.assertTrue(any("WORKSPACE SKILLS" in title for title, _ in grouped))
         self.assertTrue(any("WORKSPACE RULES" in title for title, _ in grouped))
+        self.assertTrue(any("WORKSPACE SUBAGENTS" in title for title, _ in grouped))
 
         # Test filter text
         self.tui.filter_text = "demo"
         filtered_items = self.tui.get_flattened_selectable_items()
-        self.assertEqual(len(filtered_items), 1)
-        self.assertEqual(filtered_items[0].name, "demo-tool")
+        self.assertEqual(len(filtered_items), 2)
+        self.assertEqual({i.name for i in filtered_items}, {"demo-tool", "demo-agent"})
 
         # Test non-matching filter
         self.tui.filter_text = "non-existent-xyz"
