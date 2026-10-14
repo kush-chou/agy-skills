@@ -1,25 +1,24 @@
 """Validator for Antigravity skills and rules."""
 
-from pathlib import Path
 import re
 from typing import List
 
 from .models import Rule, Skill
 
-MAX_RULE_SIZE_BYTES = 24_000  # 24 KB Antigravity hard cap
+MAX_RULE_SIZE_BYTES = 24_576  # 24 KB (24 * 1024) Antigravity hard limit
 
 
 def validate_skill(skill: Skill) -> List[str]:
-    """Validate a Skill according to Antigravity rules and conventions."""
+    """Validate a Skill according to Antigravity format specifications and frontmatter standards."""
     errors: List[str] = []
 
-    # 1. Name format: kebab-case
+    # 1. Name format: lowercase-hyphenated (kebab-case)
     if not skill.name:
         errors.append("Skill missing 'name' in YAML frontmatter.")
     elif not re.match(r"^[a-z0-9]+(-[a-z0-9]+)*$", skill.name):
         errors.append(f"Skill name '{skill.name}' must be lowercase-hyphenated (kebab-case).")
 
-    # 2. Name matches directory
+    # 2. Directory name matches skill name
     if skill.name and skill.path.name != skill.name:
         errors.append(f"Directory name '{skill.path.name}' does not match skill name '{skill.name}'.")
 
@@ -39,14 +38,14 @@ def validate_skill(skill: Skill) -> List[str]:
 
 
 def validate_rule(rule: Rule) -> List[str]:
-    """Validate a Rule according to Antigravity rules and conventions."""
+    """Validate a Rule according to Antigravity 24 KB ceiling and content rules."""
     errors: List[str] = []
 
-    # 1. 24,000 bytes hard cap
+    # 1. 24 KB hard cap
     if rule.size_bytes > MAX_RULE_SIZE_BYTES:
         errors.append(
             f"Rule exceeds 24 KB limit ({rule.size_bytes:,} bytes > {MAX_RULE_SIZE_BYTES:,} bytes). "
-            "Antigravity will truncate rules over 24,000 bytes."
+            f"Antigravity will truncate rules over {MAX_RULE_SIZE_BYTES:,} bytes."
         )
 
     # 2. Non-empty
@@ -54,5 +53,5 @@ def validate_rule(rule: Rule) -> List[str]:
         errors.append("Rule file is empty.")
 
     rule.validation_errors = errors
-    rule.is_valid = len(errors) == 0
+    rule.is_valid = len(errors) == 0 and rule.size_bytes <= MAX_RULE_SIZE_BYTES
     return errors

@@ -1,4 +1,4 @@
-"""Data models for Antigravity Skills, Rules, Subagents, and Plugins."""
+"""Data models for Antigravity Skills and Rules."""
 
 from dataclasses import dataclass, field
 from enum import Enum
@@ -10,26 +10,30 @@ from typing import Dict, List, Optional, Tuple
 class Scope(str, Enum):
     WORKSPACE = "workspace"
     GLOBAL = "global"
-    BUILTIN = "builtin"
-    CATALOG = "catalog"
 
 
 class EntityType(str, Enum):
     SKILL = "skill"
     RULE = "rule"
-    SUBAGENT = "subagent"
-    PLUGIN = "plugin"
+
+
+@dataclass
+class TokenBudget:
+    limit: int = 20_000
+
+
+DEFAULT_TOKEN_BUDGET: int = 20_000
 
 
 def estimate_tokens(text: str) -> int:
-    """Estimate token count for prompt listing / documentation text (Antigravity standard: ~3.04 chars/token)."""
+    """Estimate token count from raw text content (~3.5 chars/token)."""
     if not text:
         return 0
-    return max(1, round(len(text) / 3.0388))
+    return max(1, round(len(text) / 3.5))
 
 
 def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
-    """Extract frontmatter and body from markdown content."""
+    """Extract YAML frontmatter and body from markdown content."""
     frontmatter: Dict[str, str] = {}
     body = content
 
@@ -43,7 +47,6 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
     multiline_val: List[str] = []
 
     for line in fm_text.splitlines():
-        # Check for new key: value
         key_match = re.match(r"^([a-zA-Z0-9_-]+):\s*(.*)$", line)
         if key_match:
             if current_key and multiline_val:
@@ -54,7 +57,6 @@ def parse_frontmatter(content: str) -> Tuple[Dict[str, str], str]:
             raw_val = key_match.group(2).strip()
 
             if raw_val in (">-", ">", "|", "|-"):
-                # Multiline folded/literal indicator
                 multiline_val = []
             else:
                 frontmatter[current_key] = raw_val.strip("\"'")
@@ -74,20 +76,18 @@ class Skill:
     path: Path
     skill_file: Path
     scope: Scope
-    raw_content: str = ""
-    body: str = ""
-    author: str = "Google Antigravity"
-    slash_trigger: str = ""
-    tier: str = "WORKSPACE"
     tokens: int = 0
     is_active: bool = True
+    is_valid: bool = True
+    validation_errors: List[str] = field(default_factory=list)
+    raw_content: str = ""
+    body: str = ""
     is_overridden: bool = False
     scripts: List[Path] = field(default_factory=list)
     references: List[Path] = field(default_factory=list)
     examples: List[Path] = field(default_factory=list)
     resources: List[Path] = field(default_factory=list)
-    is_valid: bool = True
-    validation_errors: List[str] = field(default_factory=list)
+    aliases: List[Path] = field(default_factory=list)
 
     @classmethod
     def from_directory(cls, dir_path: Path, scope: Scope) -> Optional["Skill"]:
@@ -95,30 +95,11 @@ class Skill:
         if not skill_file.is_file():
             return None
 
-        try:
-            content = skill_file.read_text(encoding="utf-8", errors="replace")
-        except Exception:
-            return None
-
+        content = skill_file.read_text(encoding="utf-8", errors="replace")
         frontmatter, body = parse_frontmatter(content)
         name = frontmatter.get("name", dir_path.name)
         description = frontmatter.get("description", "")
-        author = frontmatter.get("author", "Google Antigravity")
-        slash_trigger = frontmatter.get("slash_trigger", f"/{name}")
-        override = frontmatter.get("override", "").lower() in ("true", "1", "yes")
-
-        tier_map = {
-            Scope.WORKSPACE: "WORKSPACE",
-            Scope.GLOBAL: "GLOBAL",
-            Scope.BUILTIN: "BUILT-IN",
-            Scope.CATALOG: "CATALOG AVAILABLE",
-        }
-        tier = tier_map.get(scope, "WORKSPACE")
-        listing = f"- {name}: {description}"
-        tokens = estimate_tokens(listing)
-
-        # Inactive by default if in Catalog
-        is_active = (scope != Scope.CATALOG)
+        tokens = estimate_tokens(content)
 
         def list_dir_files(sub: str) -> List[Path]:
             p = dir_path / sub
@@ -132,14 +113,10 @@ class Skill:
             path=dir_path,
             skill_file=skill_file,
             scope=scope,
+            tokens=tokens,
             raw_content=content,
             body=body,
-            author=author,
-            slash_trigger=slash_trigger,
-            tier=tier,
-            tokens=tokens,
-            is_active=is_active,
-            is_overridden=override,
+            is_active=True,
             scripts=list_dir_files("scripts"),
             references=list_dir_files("references"),
             examples=list_dir_files("examples"),
@@ -153,136 +130,45 @@ class Rule:
     path: Path
     scope: Scope
     size_bytes: int = 0
-    raw_content: str = ""
-    tier: str = "WORKSPACE"
     tokens: int = 0
     is_active: bool = True
     is_valid: bool = True
     validation_errors: List[str] = field(default_factory=list)
+    raw_content: str = ""
+    description: str = ""
+    is_overridden: bool = False
+    aliases: List[Path] = field(default_factory=list)
 
     @classmethod
     def from_file(cls, file_path: Path, scope: Scope, name_override: Optional[str] = None) -> Optional["Rule"]:
         if not file_path.is_file():
             return None
 
-        try:
-            content = file_path.read_text(encoding="utf-8", errors="replace")
-            size_bytes = file_path.stat().st_size
-        except Exception:
-            return None
-
+        content = file_path.read_text(encoding="utf-8", errors="replace")
+        size_bytes = file_path.stat().st_size
         name = name_override or file_path.name
-        tier = "WORKSPACE" if scope == Scope.WORKSPACE else "GLOBAL"
         tokens = estimate_tokens(content)
+        is_valid = size_bytes <= 24576
+
+        desc = ""
+        for line in content.splitlines():
+            clean = line.strip()
+            if not clean:
+                continue
+            if clean.startswith("#"):
+                clean = clean.lstrip("#").strip()
+            if clean and not desc:
+                desc = clean
+                break
 
         return cls(
             name=name,
             path=file_path,
             scope=scope,
             size_bytes=size_bytes,
-            raw_content=content,
-            tier=tier,
             tokens=tokens,
             is_active=True,
+            is_valid=is_valid,
+            raw_content=content,
+            description=desc,
         )
-
-
-@dataclass
-class Subagent:
-    name: str
-    role: str
-    description: str
-    tier: str = "BUILT-IN"
-    scope: Scope = Scope.BUILTIN
-    model: str = "inherit"
-    system_prompt: str = ""
-    tokens: int = 0
-    is_active: bool = True
-    tools: List[str] = field(default_factory=list)
-    path: Optional[Path] = None
-
-
-@dataclass
-class ComponentBreakdown:
-    name: str
-    category: str  # "Skills", "Subagents", "Mcp Tools", "Rules"
-    description: str
-    tokens: int
-    is_active: bool = True
-    is_excluded: bool = False
-    details: str = ""
-
-
-@dataclass
-class Plugin:
-    name: str
-    path: Path
-    dir_name: str = ""
-    display_name: str = ""
-    version: str = "1.0.0"
-    tier: str = "INSTALLED"
-    scope: Scope = Scope.GLOBAL
-    author: str = "Google Cloud / Ecosystem"
-    description: str = ""
-    skills_count: int = 0
-    tokens: int = 0
-    is_active: bool = True
-    skills: List[str] = field(default_factory=list)
-    mcp_servers: List[str] = field(default_factory=list)
-
-    # Rich UI & metadata fields matching Antigravity IDE Customizations
-    suggested_prompts: List[str] = field(default_factory=list)
-    resources: List[Dict[str, str]] = field(default_factory=list)
-    commands: List[Tuple[str, str, int]] = field(default_factory=list)  # (trigger, desc, tokens)
-    agents: List[Tuple[str, str, int]] = field(default_factory=list)    # (name, desc, tokens)
-    mcp_tools: List[Tuple[str, str, int, bool]] = field(default_factory=list) # (name, server/url, tokens, is_excluded)
-    rules: List[Tuple[str, str, int]] = field(default_factory=list)     # (name, desc, tokens)
-
-    # Token category breakdown
-    skills_tokens: int = 0
-    agents_tokens: int = 0
-    mcp_tokens: int = 0
-    rules_tokens: int = 0
-    excluded_tools_count: int = 0
-
-    # Itemized breakdowns
-    breakdowns: List[ComponentBreakdown] = field(default_factory=list)
-
-    # Extra metadata
-    homepage: str = ""
-    repository: str = ""
-    license: str = ""
-
-    @property
-    def active_tokens(self) -> int:
-        """Tokens contributing to active context when plugin is enabled."""
-        return self.tokens if self.is_active else 0
-
-    def recalculate_tokens(self) -> int:
-        """Recalculate tokens based on breakdown item states."""
-        if not self.breakdowns:
-            return self.tokens
-
-        s_tok = sum(b.tokens for b in self.breakdowns if b.category == "Skills" and b.is_active)
-        a_tok = sum(b.tokens for b in self.breakdowns if b.category == "Subagents" and b.is_active)
-        m_tok = sum(b.tokens for b in self.breakdowns if b.category == "Mcp Tools" and b.is_active and not b.is_excluded)
-        r_tok = sum(b.tokens for b in self.breakdowns if b.category == "Rules" and b.is_active)
-
-        self.skills_tokens = s_tok
-        self.agents_tokens = a_tok
-        self.mcp_tokens = m_tok
-        self.rules_tokens = r_tok
-        self.tokens = s_tok + a_tok + m_tok + r_tok
-        return self.tokens
-
-
-@dataclass
-class MCPServer:
-    name: str
-    tools_count: int = 0
-    tools: List[str] = field(default_factory=list)
-    is_active: bool = True
-    path: Optional[Path] = None
-    description: str = ""
-    instructions: str = ""
-

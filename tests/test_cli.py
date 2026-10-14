@@ -1,146 +1,160 @@
-"""Unit tests for CLI diagnostic outputs."""
+"""Unit tests for agy-skills CLI commands and outputs."""
 
 import io
+import json
 from pathlib import Path
 import sys
 import tempfile
 import unittest
 
-from agy_skills.cli import print_info, print_lint, print_list
+from agy_skills.cli import (
+    cli_disable,
+    cli_enable,
+    cli_info,
+    cli_lint,
+    cli_list,
+    cli_status,
+)
 from agy_skills.discovery import CustomizationRegistry
+from agy_skills.models import Scope
 
 
 class TestCLI(unittest.TestCase):
-    def test_cli_list_and_lint(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.root = Path(self.tmp.name)
+        (self.root / ".git").mkdir()
 
-            skill_dir = root / ".agents" / "skills" / "sample-skill"
-            skill_dir.mkdir(parents=True)
-            (skill_dir / "SKILL.md").write_text(
-                "---\nname: sample-skill\ndescription: A valid sample skill for testing CLI output.\n---\nBody",
-                encoding="utf-8",
-            )
-
-            home = root / "fake_home"
-            home.mkdir()
-
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-
-            # Capture stdout
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                print_list(registry)
-                exit_code = print_lint(registry)
-            finally:
-                sys.stdout = sys.__stdout__
-
-            output = captured.getvalue()
-            self.assertIn("sample-skill", output)
-            self.assertEqual(exit_code, 0)
-
-    def test_cli_plugin_inspect_and_tokens(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
-            home = root / "fake_home"
-            home.mkdir()
-
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
-
-            # Test print_tokens
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                from agy_skills.cli import print_tokens
-                print_tokens(registry)
-            finally:
-                sys.stdout = sys.__stdout__
-
-            tok_out = captured.getvalue()
-            self.assertIn("20,000 tokens", tok_out)
-            self.assertIn("Context Gauge:", tok_out)
-
-    def test_cli_plugin_info_and_toggle(self):
-        from agy_skills.cli import print_plugin_info, toggle_plugin_component_cli
-        from agy_skills.models import ComponentBreakdown, Plugin, Scope
-
-        bd1 = ComponentBreakdown(name="sub-tool-1", category="Mcp Tools", tokens=374, is_active=True, description="Tool 1")
-        bd2 = ComponentBreakdown(name="sub-tool-2", category="Mcp Tools", tokens=374, is_active=True, description="Tool 2")
-        plugin = Plugin(
-            name="test-plugin",
-            path=Path("/tmp/test-plugin"),
-            version="1.0.0",
-            tokens=748,
-            is_active=True,
-            scope=Scope.CATALOG,
-            breakdowns=[bd1, bd2],
-            mcp_tools=["sub-tool-1", "sub-tool-2"],
+        # Create valid workspace skill
+        s_dir = self.root / ".agents" / "skills" / "sample-skill"
+        s_dir.mkdir(parents=True)
+        (s_dir / "SKILL.md").write_text(
+            "---\nname: sample-skill\ndescription: A valid sample skill for testing CLI output.\n---\nBody here.",
+            encoding="utf-8",
         )
 
+        # Create workspace rule
+        (self.root / "GEMINI.md").write_text("# Style Guide\nWrite clean tests.", encoding="utf-8")
+
+        self.home = self.root / "fake_home"
+        self.home.mkdir()
+
+        self.registry = CustomizationRegistry(workspace_root=self.root, home_dir=self.home)
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_cli_list_text_and_json(self):
         captured = io.StringIO()
         sys.stdout = captured
         try:
-            print_plugin_info(plugin, show_breakdowns=True)
+            exit_code = cli_list(self.registry)
         finally:
             sys.stdout = sys.__stdout__
 
-        info_out = captured.getvalue()
-        self.assertIn("test-plugin", info_out)
-        self.assertIn("sub-tool-1", info_out)
-        self.assertIn("748", info_out)
+        out = captured.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("sample-skill", out)
+        self.assertIn("GEMINI.md", out)
 
-    def test_cli_status_and_scope_install(self):
-        from agy_skills.cli import print_status, run_install, toggle_customization_cli
-        from agy_skills.models import Scope
+        # JSON mode
+        captured_json = io.StringIO()
+        sys.stdout = captured_json
+        try:
+            exit_json = cli_list(self.registry, as_json=True)
+        finally:
+            sys.stdout = sys.__stdout__
 
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
-            home = root / "fake_home"
-            home.mkdir()
+        self.assertEqual(exit_json, 0)
+        data = json.loads(captured_json.getvalue())
+        self.assertIn("skills", data)
+        self.assertIn("rules", data)
+        self.assertEqual(data["skills"][0]["name"], "sample-skill")
 
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
+    def test_cli_status_text_and_json(self):
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            exit_code = cli_status(self.registry)
+        finally:
+            sys.stdout = sys.__stdout__
 
-            # Test print_status
-            captured = io.StringIO()
-            sys.stdout = captured
-            try:
-                print_status(registry)
-            finally:
-                sys.stdout = sys.__stdout__
+        out = captured.getvalue()
+        self.assertEqual(exit_code, 0)
+        self.assertIn("Context Gauge:", out)
+        self.assertIn("20,000", out)
 
-            status_out = captured.getvalue()
-            self.assertIn("Antigravity Engine & Customizations Diagnostic", status_out)
-            self.assertIn("Zero-Touch Invariant", status_out)
-            self.assertIn("20,000 tokens", status_out)
+        # JSON mode
+        captured_json = io.StringIO()
+        sys.stdout = captured_json
+        try:
+            exit_json = cli_status(self.registry, as_json=True)
+        finally:
+            sys.stdout = sys.__stdout__
 
-            # Test run_install workspace target: must be root / .gemini / skills
-            code = run_install("superpowers", Scope.WORKSPACE, root, home)
-            self.assertEqual(code, 0)
-            ws_dest = root / ".gemini" / "skills" / "superpowers"
-            self.assertTrue(ws_dest.is_dir())
-            self.assertTrue((ws_dest / "SKILL.md").is_file())
+        self.assertEqual(exit_json, 0)
+        data = json.loads(captured_json.getvalue())
+        self.assertEqual(data["token_budget"], 20000)
+        self.assertIn("counts", data)
+        self.assertIn("compliance", data)
 
-            # Verify home / .agents / skills was NEVER touched
-            self.assertFalse((home / ".agents").exists())
+    def test_cli_enable_and_disable(self):
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            # Disable
+            ret_dis = cli_disable(self.registry, "sample-skill")
+            self.assertEqual(ret_dis, 0)
+            self.registry.discover_all()
+            skill = self.registry.find_item("sample-skill")
+            self.assertFalse(skill.is_active)
 
-            # Test run_install global target: must be home / .gemini / config / skills
-            code_gl = run_install("graphify", Scope.GLOBAL, root, home)
-            self.assertEqual(code_gl, 0)
-            gl_dest = home / ".gemini" / "config" / "skills" / "graphify"
-            self.assertTrue(gl_dest.is_dir())
-            self.assertTrue((gl_dest / "SKILL.md").is_file())
+            # Re-enable
+            ret_en = cli_enable(self.registry, "sample-skill")
+            self.assertEqual(ret_en, 0)
+            self.registry.discover_all()
+            skill = self.registry.find_item("sample-skill")
+            self.assertTrue(skill.is_active)
+        finally:
+            sys.stdout = sys.__stdout__
 
-            # Test enable and disable CLI
-            registry.discover_all()
-            dis_code = toggle_customization_cli(registry, "superpowers", action="disable", item_type="skill", scope=Scope.WORKSPACE)
-            self.assertEqual(dis_code, 0)
-            en_code = toggle_customization_cli(registry, "superpowers", action="enable", item_type="skill", scope=Scope.WORKSPACE)
-            self.assertEqual(en_code, 0)
+    def test_cli_info_text_and_json(self):
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            exit_code = cli_info(self.registry, "sample-skill")
+        finally:
+            sys.stdout = sys.__stdout__
+
+        self.assertEqual(exit_code, 0)
+        out = captured.getvalue()
+        self.assertIn("sample-skill", out)
+        self.assertIn("WORKSPACE", out)
+
+        # JSON mode
+        captured_json = io.StringIO()
+        sys.stdout = captured_json
+        try:
+            exit_json = cli_info(self.registry, "sample-skill", as_json=True)
+        finally:
+            sys.stdout = sys.__stdout__
+
+        self.assertEqual(exit_json, 0)
+        data = json.loads(captured_json.getvalue())
+        self.assertEqual(data["name"], "sample-skill")
+        self.assertEqual(data["scope"], "workspace")
+
+    def test_cli_lint(self):
+        captured = io.StringIO()
+        sys.stdout = captured
+        try:
+            exit_code = cli_lint(self.registry)
+        finally:
+            sys.stdout = sys.__stdout__
+
+        self.assertEqual(exit_code, 0)
+        out = captured.getvalue()
+        self.assertIn("adhere to Antigravity specifications", out)
 
 
 if __name__ == "__main__":

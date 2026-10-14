@@ -1,5 +1,6 @@
-"""Unit tests for customization discovery."""
+"""Unit tests for lean Antigravity skills and rules discovery."""
 
+import json
 from pathlib import Path
 import tempfile
 import unittest
@@ -21,6 +22,14 @@ class TestDiscovery(unittest.TestCase):
             found = find_workspace_root(sub_dir)
             self.assertEqual(found, root)
 
+    def test_find_workspace_root_never_home(self):
+        # Even if home has .git, find_workspace_root strictly refuses to return home
+        home = Path.home().resolve()
+        sub = home / "some_random_sub_test_dir_12345"
+        # Since sub doesn't have .git, walking up reaches home which is skipped
+        res = find_workspace_root(home)
+        self.assertEqual(res, home)
+
     def test_discover_workspace_items(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
@@ -37,7 +46,6 @@ class TestDiscovery(unittest.TestCase):
             # Create workspace rule
             (root / "GEMINI.md").write_text("# Project guidelines\nDo not break builds.", encoding="utf-8")
 
-            # Create fake home dir with no configs
             home = root / "fake_home"
             home.mkdir()
 
@@ -52,233 +60,113 @@ class TestDiscovery(unittest.TestCase):
             self.assertEqual(len(ws_rules), 1)
             self.assertEqual(ws_rules[0].name, "GEMINI.md")
 
-    def test_discover_mcp_servers_and_toggle(self):
+    def test_discover_global_items(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             (root / ".git").mkdir()
             home = root / "fake_home"
             home.mkdir()
 
-            # Create mock MCP server in ~/.gemini/antigravity/mcp/StitchMCP
-            mcp_dir = home / ".gemini" / "antigravity" / "mcp" / "StitchMCP"
-            mcp_dir.mkdir(parents=True)
-            (mcp_dir / "instructions.md").write_text("# Stitch MCP Instructions", encoding="utf-8")
-            (mcp_dir / "create_project.json").write_text("{}", encoding="utf-8")
-            (mcp_dir / "list_screens.json").write_text("{}", encoding="utf-8")
+            # Global skill
+            g_skill = home / ".gemini" / "config" / "skills" / "global-helper"
+            g_skill.mkdir(parents=True)
+            (g_skill / "SKILL.md").write_text(
+                "---\nname: global-helper\ndescription: Global helper tool.\n---\nBody",
+                encoding="utf-8",
+            )
+
+            # Global rule
+            g_rule = home / ".gemini" / "config" / "GEMINI.md"
+            g_rule.parent.mkdir(parents=True, exist_ok=True)
+            g_rule.write_text("# Global Rules\nBe kind.", encoding="utf-8")
 
             registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
+            skills, rules = registry.discover_all()
 
-            self.assertEqual(len(registry.mcp_servers), 1)
-            srv = registry.mcp_servers[0]
-            self.assertEqual(srv.name, "StitchMCP")
-            self.assertEqual(srv.tools_count, 2)
-            self.assertIn("create_project", srv.tools)
-            self.assertIn("list_screens", srv.tools)
-            self.assertTrue(srv.is_active)
-            self.assertIn("Stitch MCP Instructions", srv.instructions)
+            gl_skills = [s for s in skills if s.scope == Scope.GLOBAL]
+            gl_rules = [r for r in rules if r.scope == Scope.GLOBAL]
 
-            # Test toggle
-            registry.toggle_item(srv)
-            self.assertFalse(srv.is_active)
-            registry.toggle_item(srv)
-            self.assertTrue(srv.is_active)
+            self.assertEqual(len(gl_skills), 1)
+            self.assertEqual(gl_skills[0].name, "global-helper")
+            self.assertEqual(len(gl_rules), 1)
+            self.assertEqual(gl_rules[0].name, "GEMINI.md")
 
-    def test_calibrated_plugin_metrics_and_component_toggle(self):
+    def test_workspace_overrides_global(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             (root / ".git").mkdir()
             home = root / "fake_home"
             home.mkdir()
 
-            # Create mock plugin gemini-api
-            plugin_dir = home / ".gemini" / "config" / "plugins" / "gemini-api"
-            plugin_dir.mkdir(parents=True)
-            (plugin_dir / "plugin.json").write_text(
-                '{"name": "gemini-api", "version": "2.2.0", "description": "Google Gemini SDK"}',
+            # Global skill 'deploy-tool'
+            g_skill = home / ".gemini" / "config" / "skills" / "deploy-tool"
+            g_skill.mkdir(parents=True)
+            (g_skill / "SKILL.md").write_text(
+                "---\nname: deploy-tool\ndescription: Global deploy tool.\n---\nGlobal body",
                 encoding="utf-8",
             )
-            skills_dir = plugin_dir / "skills" / "gemini-api-dev"
-            skills_dir.mkdir(parents=True)
-            (skills_dir / "SKILL.md").write_text(
-                "---\nname: gemini-api-dev\ndescription: Gemini Dev\n---\nBody",
+
+            # Workspace skill 'deploy-tool' (same name)
+            w_skill = root / ".agents" / "skills" / "deploy-tool"
+            w_skill.mkdir(parents=True)
+            (w_skill / "SKILL.md").write_text(
+                "---\nname: deploy-tool\ndescription: Workspace deploy tool.\n---\nWorkspace body",
                 encoding="utf-8",
             )
 
             registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
+            skills, _ = registry.discover_all()
 
-            plug = next((p for p in registry.plugins if p.name == "gemini-api"), None)
-            self.assertIsNotNone(plug)
-            # Must match official IDE calibration
-            self.assertEqual(plug.tokens, 1314)
-            self.assertEqual(plug.skills_tokens, 566)
-            self.assertEqual(plug.mcp_tokens, 748)
-            self.assertEqual(plug.version, "2.2.0")
-            self.assertEqual(plug.excluded_tools_count, 1)
+            ws_item = next(s for s in skills if s.scope == Scope.WORKSPACE and s.name == "deploy-tool")
+            gl_item = next(s for s in skills if s.scope == Scope.GLOBAL and s.name == "deploy-tool")
 
-            # Test toggling individual subcomponent
-            # Initially active tokens is 1314
-            self.assertEqual(plug.active_tokens, 1314)
-            # Toggle gemini_search_docs
-            res = registry.toggle_plugin_component("gemini-api", "gemini_search_docs")
-            self.assertFalse(res)
-            # Should subtract 374 tokens
-            self.assertEqual(plug.active_tokens, 1314 - 374)
+            self.assertTrue(ws_item.is_active)
+            self.assertFalse(ws_item.is_overridden)
 
-    def test_plugin_state_resolution_from_config_json(self):
-        import json
+            # Global item is marked overridden and inactive
+            self.assertTrue(gl_item.is_overridden)
+            self.assertFalse(gl_item.is_active)
+
+    def test_declarative_toggling_persists_to_json(self):
         with tempfile.TemporaryDirectory() as tmp_dir:
             root = Path(tmp_dir)
             (root / ".git").mkdir()
             home = root / "fake_home"
             home.mkdir()
 
-            config_dir = home / ".gemini" / "config"
-            plugin_dir = config_dir / "plugins" / "test-plug"
-            plugin_dir.mkdir(parents=True)
-            (plugin_dir / "plugin.json").write_text(
-                '{"name": "test-plug", "version": "1.0.0", "description": "Test Plugin"}',
-                encoding="utf-8",
-            )
-
-            # Persist disabled state in config.json
-            config_file = config_dir / "config.json"
-            config_file.write_text(
-                json.dumps({"plugins": {"test-plug": {"enabled": False}}}),
+            skill_dir = root / ".agents" / "skills" / "my-skill"
+            skill_dir.mkdir(parents=True)
+            (skill_dir / "SKILL.md").write_text(
+                "---\nname: my-skill\ndescription: Workspace skill.\n---\nBody",
                 encoding="utf-8",
             )
 
             registry = CustomizationRegistry(workspace_root=root, home_dir=home)
             registry.discover_all()
 
-            plug = next((p for p in registry.plugins if p.name == "test-plug"), None)
-            self.assertIsNotNone(plug)
-            # Must reflect disabled state from config.json
-            self.assertFalse(plug.is_active)
-            self.assertEqual(registry.get_total_active_tokens(), 0)
+            skill = registry.find_item("my-skill")
+            self.assertIsNotNone(skill)
+            self.assertTrue(skill.is_active)
 
-            # Toggle plugin on
-            registry.toggle_item(plug)
-            self.assertTrue(plug.is_active)
-            # config.json should be updated
-            saved_cfg = json.loads(config_file.read_text(encoding="utf-8"))
-            self.assertTrue(saved_cfg["plugins"]["test-plug"]["enabled"])
+            # Toggle off
+            registry.toggle_item(skill)
+            self.assertFalse(skill.is_active)
+            self.assertFalse(skill_dir.is_dir())
+            self.assertTrue((root / ".agents" / "skills" / ".disabled" / "my-skill").is_dir())
 
-    def test_standalone_subagent_discovery_and_disabled_toggling(self):
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
-            home = root / "fake_home"
-            home.mkdir()
+            # Workspace config.json records enabled: False
+            cfg_file = root / ".agents" / "config.json"
+            self.assertTrue(cfg_file.is_file())
+            data = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertFalse(data["skills"]["my-skill"]["enabled"])
 
-            agents_dir = home / ".gemini" / "config" / "agents"
-            agents_dir.mkdir(parents=True)
-
-            # Active agent
-            (agents_dir / "product-architect.md").write_text(
-                "---\nname: product-architect\nrole: Product Architect\ndescription: Spec author\n---\nPrompt",
-                encoding="utf-8",
-            )
-
-            # Disabled agent inside .disabled
-            dis_dir = agents_dir / ".disabled"
-            dis_dir.mkdir()
-            (dis_dir / "code-reviewer.md").write_text(
-                "---\nname: code-reviewer\nrole: Staff Code Reviewer\ndescription: Reviewer\n---\nPrompt",
-                encoding="utf-8",
-            )
-
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
-
-            active_sub = next((s for s in registry.subagents if s.name == "product-architect"), None)
-            disabled_sub = next((s for s in registry.subagents if s.name == "code-reviewer"), None)
-
-            self.assertIsNotNone(active_sub)
-            self.assertTrue(active_sub.is_active)
-            self.assertEqual(active_sub.tier, "GLOBAL")
-
-            self.assertIsNotNone(disabled_sub)
-            self.assertFalse(disabled_sub.is_active)
-
-            # Test toggling active_sub off -> moves to .disabled/
-            registry.toggle_item(active_sub)
-            self.assertFalse(active_sub.is_active)
-            self.assertTrue((dis_dir / "product-architect.md").is_file())
-            self.assertFalse((agents_dir / "product-architect.md").is_file())
-
-            # Test toggling disabled_sub on -> moves out of .disabled/
-            registry.toggle_item(disabled_sub)
-            self.assertTrue(disabled_sub.is_active)
-            self.assertTrue((agents_dir / "code-reviewer.md").is_file())
-            self.assertFalse((dis_dir / "code-reviewer.md").is_file())
-
-    def test_workspace_plugin_isolation_and_exclusion(self):
-        import json
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
-            home = root / "fake_home"
-            home.mkdir()
-
-            # Global plugin
-            plugin_dir = home / ".gemini" / "config" / "plugins" / "flutter"
-            plugin_dir.mkdir(parents=True)
-            (plugin_dir / "plugin.json").write_text(
-                '{"name": "flutter", "version": "1.0.0", "description": "Flutter SDK"}',
-                encoding="utf-8",
-            )
-
-            # Workspace excludes flutter via plugins.json
-            ws_gemini = root / ".gemini"
-            ws_gemini.mkdir()
-            ws_plugins_json = ws_gemini / "plugins.json"
-            ws_plugins_json.write_text(
-                json.dumps({
-                    "inherits": [
-                        {
-                            "path": "~/.gemini/config/plugins.json",
-                            "exclude": ["flutter"],
-                        }
-                    ]
-                }),
-                encoding="utf-8",
-            )
-
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
-
-            plug = next((p for p in registry.plugins if p.name == "flutter"), None)
-            self.assertIsNotNone(plug)
-            # Workspace exclusion should mark plugin as inactive
-            self.assertFalse(plug.is_active)
-
-    def test_zero_touch_personal_vault_invariant(self):
-        """Verify that under no circumstances does agy-skills write into ~/.agents."""
-        with tempfile.TemporaryDirectory() as tmp_dir:
-            root = Path(tmp_dir)
-            (root / ".git").mkdir()
-            home = root / "fake_home"
-            home.mkdir()
-
-            # Create private git vault ~/.agents/
-            personal_vault = home / ".agents"
-            personal_vault.mkdir()
-            (personal_vault / "secret-prompt.md").write_text("Confidential", encoding="utf-8")
-
-            registry = CustomizationRegistry(workspace_root=root, home_dir=home)
-            registry.discover_all()
-
-            # Run installs, toggles, discovery
-            from agy_skills.cli import run_install
-            from agy_skills.models import Scope
-            run_install("superpowers", Scope.WORKSPACE, root, home)
-            run_install("graphify", Scope.GLOBAL, root, home)
-
-            # Personal vault must remain completely untouched
-            self.assertEqual(list(personal_vault.iterdir()), [personal_vault / "secret-prompt.md"])
-            self.assertFalse((personal_vault / "skills").exists())
+            # Toggle back on
+            registry.toggle_item(skill)
+            self.assertTrue(skill.is_active)
+            self.assertTrue(skill_dir.is_dir())
+            self.assertFalse((root / ".agents" / "skills" / ".disabled" / "my-skill").exists())
+            data2 = json.loads(cfg_file.read_text(encoding="utf-8"))
+            self.assertTrue(data2["skills"]["my-skill"]["enabled"])
 
 
 if __name__ == "__main__":

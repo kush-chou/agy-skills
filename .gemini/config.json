@@ -1,0 +1,8 @@
+{
+  "rules": {},
+  "skills": {
+    "permissioned-github": {
+      "enabled": false
+    }
+  }
+}
